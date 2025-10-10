@@ -1,0 +1,8 @@
+# JSON
+*.json
+
+# Logs
+*.log
+
+# Backups
+backups
