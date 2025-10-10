@@ -4,6 +4,7 @@ Autor: MMaffi
 """
 
 import os
+import ctypes
 import sys
 import json
 import shutil
@@ -17,6 +18,32 @@ import threading
 import logging
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox, scrolledtext
+
+# ------- EXECUTA EM MODO ADM -------
+def is_admin():
+    """Verifica se o programa está sendo executado como administrador"""
+    try:
+        return ctypes.windll.shell32.IsUserAnAdmin()
+    except:
+        return False
+
+def run_as_admin():
+    """Reinicia o programa com elevação de administrador"""
+    if not is_admin():
+        try:
+            ctypes.windll.shell32.ShellExecuteW(
+                None, "runas", sys.executable, " ".join(sys.argv), None, 1
+            )
+            sys.exit(0)
+        except Exception as e:
+            logging.error(f"Falha ao solicitar elevação: {e}")
+            messagebox.showerror(
+                "Erro de Permissão", 
+                "Não foi possível executar como administrador.\n"
+                "Execute o programa manualmente como Administrador."
+            )
+            return False
+    return True
 
 # ---------- CONFIG ----------
 BASE_DIR = Path(__file__).resolve().parent
@@ -675,8 +702,27 @@ class FirebirdManagerApp(tk.Tk):
 # ---------- MAIN ----------
 if __name__ == "__main__":
     try:
+        # Solicitar modo administrador se necessário
+        if not is_admin():
+            response = messagebox.askyesno(
+                "Permissão de Administrador",
+                "Este programa requer permissões de administrador para \n"
+                "gerenciar processos do Firebird.\n\n"
+                "Deseja executar como administrador?",
+                icon=messagebox.WARNING
+            )
+            if response:
+                run_as_admin()
+            else:
+                messagebox.showinfo(
+                    "Informação",
+                    "Algumas funcionalidades podem não funcionar \n"
+                    "sem permissões de administrador."
+                )
+        
         app = FirebirdManagerApp()
         app.mainloop()
+        
     except Exception as e:
         print(f"Erro fatal: {e}")
         messagebox.showerror("Erro Fatal", f"Falha ao iniciar aplicação:\n{e}")
