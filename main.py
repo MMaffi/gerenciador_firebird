@@ -176,7 +176,7 @@ class FirebirdManagerApp(tk.Tk):
         try:
             self.title("Firebird Manager PRO")
             self.iconbitmap("./images/icon.ico")
-            self.geometry("800x600")
+            self.geometry("800x700")
             self.resizable(True, True)
             self.configure(bg="#f5f5f5")
             
@@ -272,6 +272,32 @@ class FirebirdManagerApp(tk.Tk):
         self.output.tag_config("debug", foreground="gray")
 
         self.log("✅ Aplicativo iniciado. Selecione uma ação acima.", "success")
+
+        # ---- RODAPÉ ----
+        APP_VERSION = "1.0.0"
+
+        footer_frame = tk.Frame(self, bg="#f5f5f5", relief="ridge", borderwidth=1)
+        footer_frame.pack(side="bottom", fill="x")
+
+        footer_left = tk.Label(
+            footer_frame,
+            text="© 2025 MMaffi. Todos os direitos reservados.",
+            font=("Arial", 9),
+            bg="#f5f5f5",
+            fg="gray",
+            anchor="w"
+        )
+        footer_left.pack(side="left", padx=10, pady=3)
+
+        footer_right = tk.Label(
+            footer_frame,
+            text=f"Versão {APP_VERSION}",
+            font=("Arial", 9),
+            bg="#f5f5f5",
+            fg="gray",
+            anchor="e"
+        )
+        footer_right.pack(side="right", padx=10, pady=3)
 
     # ---------- UTILIDADES ----------
     def log(self, msg, tag="info"):
