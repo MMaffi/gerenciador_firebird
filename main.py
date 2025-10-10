@@ -46,9 +46,15 @@ def run_as_admin():
     return True
 
 # ---------- CONFIG ----------
-BASE_DIR = Path(__file__).resolve().parent
+if getattr(sys, 'frozen', False):
+    # Executável PyInstaller
+    BASE_DIR = Path(sys.executable).parent
+else:
+    BASE_DIR = Path(__file__).resolve().parent
+
 CONFIG_PATH = BASE_DIR / "config.json"
 LOG_FILE = BASE_DIR / "firebird_manager.log"
+DEFAULT_BACKUP_DIR = BASE_DIR / "backups"
 DEFAULT_KEEP_BACKUPS = 5
 
 # ---------- LOGGING ----------
@@ -82,7 +88,7 @@ def load_config():
     default = {
         "gbak_path": "",
         "gfix_path": "",
-        "backup_dir": str(BASE_DIR / "backups"),
+        "backup_dir": str(DEFAULT_BACKUP_DIR),
         "keep_backups": DEFAULT_KEEP_BACKUPS,
         "firebird_user": "SYSDBA",
         "firebird_password": "masterkey",
@@ -201,8 +207,12 @@ class FirebirdManagerApp(tk.Tk):
         self.logger = setup_logging()
         
         try:
-            self.title("Firebird Manager PRO")
-            self.iconbitmap("./images/icon.ico")
+            self.title("Firebird Manager")
+            
+            # Icon app
+            icon_path = BASE_DIR / "images" / "icon.ico"
+            self.iconbitmap(str(icon_path))
+
             self.geometry("800x700")
             self.resizable(True, True)
             self.configure(bg="#f5f5f5")

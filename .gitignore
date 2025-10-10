@@ -6,3 +6,12 @@
 
 # Backups
 backups
+
+# Build
+build
+
+# Dist
+dist
+
+# Spec
+*.spec
