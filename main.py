@@ -205,6 +205,12 @@ class FirebirdManagerApp(tk.Tk):
         super().__init__()
         
         self.logger = setup_logging()
+
+        self.dev_buffer = ""
+        self.dev_mode = False
+
+        self.bind_all("<F12>", self._toggle_dev_mode)
+        self.bind_all("<Key>", self._capture_secret_key)
         
         try:
             self.title("Firebird Manager")
@@ -213,7 +219,8 @@ class FirebirdManagerApp(tk.Tk):
             icon_path = BASE_DIR / "images" / "icon.ico"
             self.iconbitmap(str(icon_path))
 
-            self.geometry("800x700")
+            self.geometry("800x700+0+7")
+            self.minsize(700, 680)
             self.resizable(True, True)
             self.configure(bg="#f5f5f5")
             
@@ -245,23 +252,28 @@ class FirebirdManagerApp(tk.Tk):
         btn_frame.pack(pady=5, padx=10, fill="x")
 
         self.btn_backup = ttk.Button(
-            btn_frame, text="📦 Gerar Backup", 
+            btn_frame, text="📦 Gerar Backup",
+            cursor="hand2",
             command=self.backup
         )
         self.btn_restore = ttk.Button(
             btn_frame, text="♻️ Restaurar Backup", 
+            cursor="hand2",
             command=self.restore
         )
         self.btn_verify = ttk.Button(
             btn_frame, text="🩺 Verificar Integridade", 
+            cursor="hand2",
             command=self.verify
         )
         self.btn_kill = ttk.Button(
-            btn_frame, text="🔥 Matar Instâncias", 
+            btn_frame, text="🔥 Matar Instâncias",
+            cursor="hand2", 
             command=self.kill
         )
         self.btn_config = ttk.Button(
-            btn_frame, text="⚙️ Configurações", 
+            btn_frame, text="⚙️ Configurações",
+            cursor="hand2", 
             command=self.config_window
         )
 
@@ -370,6 +382,40 @@ class FirebirdManagerApp(tk.Tk):
         buttons = [self.btn_backup, self.btn_restore, self.btn_verify, self.btn_kill, self.btn_config]
         for btn in buttons:
             btn.state(["!disabled"])
+
+    def _toggle_dev_mode(self, event=None):
+        """Ativa/desativa o modo dev"""
+        if not self.dev_mode:
+            self.dev_mode = True
+            self.dev_buffer = ""
+
+            # Timer de 3 segundos para cancelar automaticamente
+            self.dev_timer = self.after(3000, self._cancel_dev_mode)
+            return
+
+        if hasattr(self, "dev_timer"):
+            self.after_cancel(self.dev_timer)
+            del self.dev_timer
+
+        if self.dev_buffer.strip().lower() == "script":
+            self.open_script_console()
+
+        self.dev_mode = False
+        self.dev_buffer = ""
+
+    def _cancel_dev_mode(self):
+        """Cancela o modo secreto automaticamente após o tempo limite"""
+        self.dev_mode = False
+        self.dev_buffer = ""
+
+    def _capture_secret_key(self, event):
+        if self.dev_mode and event.keysym != "F12":
+            if event.keysym == "Return":
+                return
+            elif event.keysym == "BackSpace":
+                self.dev_buffer = self.dev_buffer[:-1]
+            else:
+                self.dev_buffer += event.char
 
     # ---------- EXECUÇÃO ----------
     def run_command(self, cmd, on_finish=None):
@@ -624,8 +670,28 @@ class FirebirdManagerApp(tk.Tk):
     def config_window(self):
         
         win = tk.Toplevel(self)
-        win.title("⚙️ Configurações do Sistema")
-        win.geometry("500x400")
+        win.title("Configurações do Sistema")
+
+        # Icon config window
+        icon_path = BASE_DIR / "images" / "icon.ico"
+        win.iconbitmap(str(icon_path))
+
+        self.update_idletasks()
+
+        largura_janela = 500
+        altura_janela = 400
+
+        largura_principal = self.winfo_width()
+        altura_principal = self.winfo_height()
+        x_principal = self.winfo_x()
+        y_principal = self.winfo_y()
+
+        # calcula posição centralizada
+        x = x_principal + (largura_principal // 2) - (largura_janela // 2)
+        y = y_principal + (altura_principal // 2) - (altura_janela // 2)
+
+        win.geometry(f"{largura_janela}x{altura_janela}+{x}+{y}")
+
         win.resizable(False, False)
         win.transient(self)
         win.grab_set()
@@ -678,12 +744,16 @@ class FirebirdManagerApp(tk.Tk):
         btn_frame.grid(row=7, column=0, columnspan=3, pady=20)
 
         ttk.Button(btn_frame, text="Salvar Configurações", 
-                  command=lambda: self.save_config_from_window(
-                      win, gbak_var, gfix_var, backup_var, host_var, user_var, pass_var, keep_var
-                  )).pack(side="left", padx=10)
+                    command=lambda: self.save_config_from_window(
+                        win, gbak_var, gfix_var, backup_var, host_var, user_var, pass_var, keep_var
+                    ),
+                    cursor="hand2"
+                  ).pack(side="left", padx=10)
         
         ttk.Button(btn_frame, text="Cancelar", 
-                  command=win.destroy).pack(side="left", padx=10)
+                  command=win.destroy,
+                  cursor="hand2"
+                  ).pack(side="left", padx=10)
 
     def save_config_from_window(self, win, gbak_var, gfix_var, backup_var, host_var, user_var, pass_var, keep_var):
         self.conf.update({
@@ -712,6 +782,64 @@ class FirebirdManagerApp(tk.Tk):
         path = filedialog.askdirectory(title="Selecione diretório de backups")
         if path:
             var.set(path)
+
+    # Janela de execução de script
+    def open_script_console(self):
+        """Abre uma janela para executar scripts Python dentro do app"""
+        win = tk.Toplevel(self)
+        win.title("Execução de Scripts")
+
+        # Icon dev window
+        icon_path = BASE_DIR / "images" / "icon.ico"
+        win.iconbitmap(str(icon_path))
+
+        win.geometry("700x500")
+        win.minsize(700, 500)
+
+        # Centraliza
+        self.update_idletasks()
+        x = self.winfo_x() + (self.winfo_width() // 2) - 350
+        y = self.winfo_y() + (self.winfo_height() // 2) - 200
+        win.geometry(f"+{x}+{y}")
+
+        win.transient(self)
+        win.grab_set()
+        win.focus_force()
+
+        ttk.Label(win, text="Digite código Python e clique em 'Executar' ou pressione 'Shift + Enter':").pack(pady=5)
+
+        text = scrolledtext.ScrolledText(win, height=15, width=80, font=("Consolas", 10))
+        text.pack(padx=10, pady=5, fill="both", expand=True)
+
+        output = scrolledtext.ScrolledText(win, height=8, width=80, font=("Consolas", 10), bg="#111", fg="#0f0")
+        output.pack(padx=10, pady=5, fill="both", expand=True)
+
+        def run_script(event=None):
+            code = text.get("1.0", tk.END).strip()
+            output.delete("1.0", tk.END)
+            if not code:
+                return
+            try:
+                local_vars = {"app": self, "config": self.conf, "Path": Path}
+                exec(code, globals(), local_vars)
+                output.insert(tk.END, "✅ Execução concluída.\n")
+            except Exception as e:
+                output.insert(tk.END, f"❌ Erro: {e}\n")
+
+        # Botão
+        ttk.Button(win, text="Executar Script", command=run_script, cursor="hand2").pack(pady=5)
+
+        # ⚡ Atalho Shift + Enter
+        text.bind("<Shift-Return>", run_script)
+
+        self.log("🧩 Console secreto de scripts aberto.", "info")
+
+        def on_close():
+            self.dev_mode = False
+            self.dev_buffer = ""
+            win.destroy()
+
+        win.protocol("WM_DELETE_WINDOW", on_close)
 
 # ---------- MAIN ----------
 if __name__ == "__main__":
