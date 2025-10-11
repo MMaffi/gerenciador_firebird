@@ -17,7 +17,9 @@ from pathlib import Path
 import threading
 import logging
 import tkinter as tk
-from tkinter import ttk, filedialog, messagebox, scrolledtext
+from tkinter import ttk, filedialog, messagebox, scrolledtext, simpledialog
+import time
+from typing import Dict, List, Optional
 
 # ------- EXECUTA EM MODO ADM -------
 def is_admin():
@@ -57,25 +59,50 @@ LOG_FILE = BASE_DIR / "firebird_manager.log"
 DEFAULT_BACKUP_DIR = BASE_DIR / "backups"
 DEFAULT_KEEP_BACKUPS = 5
 
+# ---------- SISTEMA DE NOTIFICAÇÕES ----------
+class NotificationManager:
+    
+    def __init__(self):
+        self.enabled = True
+    
+    def show_notification(self, title: str, message: str, duration: int = 5):
+        if not self.enabled:
+            return False
+            
+        try:
+            from win10toast import ToastNotifier
+            toast = ToastNotifier()
+            toast.show_toast(title, message, duration=duration, threaded=True)
+            return True
+        except ImportError:
+            try:
+                if self._is_main_thread():
+                    messagebox.showinfo(title, message)
+                return True
+            except:
+                return False
+        except Exception:
+            return False
+    
+    def _is_main_thread(self):
+        return isinstance(threading.current_thread(), threading._MainThread)
+
 # ---------- LOGGING ----------
 def setup_logging():
-    # Cria o diretório se não existir
     LOG_FILE.parent.mkdir(exist_ok=True)
     
     logger = logging.getLogger()
     logger.setLevel(logging.INFO)
-    
-    # Remove handlers existentes para evitar duplicação
+
     for handler in logger.handlers[:]:
         logger.removeHandler(handler)
     
-    # Formatação padrão
+    # Formatação
     formatter = logging.Formatter(
         '%(asctime)s - %(levelname)s - %(message)s',
         datefmt='%Y-%m-%d %H:%M:%S'
     )
-    
-    # Handler para arquivo
+
     file_handler = logging.FileHandler(LOG_FILE, encoding='utf-8')
     file_handler.setFormatter(formatter)
     logger.addHandler(file_handler)
@@ -92,7 +119,10 @@ def load_config():
         "keep_backups": DEFAULT_KEEP_BACKUPS,
         "firebird_user": "SYSDBA",
         "firebird_password": "masterkey",
-        "firebird_host": "localhost"
+        "firebird_host": "localhost",
+        "auto_monitor": True,
+        "monitor_interval": 30,
+        "notifications": True
     }
     
     if CONFIG_PATH.exists():
@@ -120,12 +150,14 @@ def save_config(conf):
         with open(CONFIG_PATH, 'w', encoding='utf-8') as f:
             json.dump(conf, f, indent=2)
         logging.info("Configurações salvas com sucesso")
+        return True
     except Exception as e:
         logging.error(f"Falha ao salvar config.json: {e}")
+        return False
 
 # ---------- AUTOMAÇÕES ----------
 def find_executable(name):
-
+    """Encontra executáveis do Firebird no sistema"""
     exe = shutil.which(name)
     if exe:
         logging.info(f"Executável encontrado no PATH: {exe}")
@@ -170,7 +202,7 @@ def cleanup_old_backups(backup_dir: Path, keep: int):
         logging.error(f"Erro durante limpeza de backups: {e}")
 
 def kill_firebird_processes():
-    """Mata processos do Firebird"""
+    """Mata processos do Firebird de forma segura"""
     firebird_processes = [
         "fb_inet_server.exe", "fbserver.exe", "fbguard.exe", 
         "firebird.exe", "ibserver.exe", "gbak.exe", "gfix.exe"
@@ -199,80 +231,128 @@ def kill_firebird_processes():
     logging.info(f"Total de processos finalizados: {killed_count}")
     return killed_count > 0
 
-# ------------ APP ------------
+def get_disk_space(path):
+    """Retorna informações de espaço em disco"""
+    try:
+        usage = shutil.disk_usage(path)
+        return {
+            'total': usage.total,
+            'used': usage.used,
+            'free': usage.free,
+            'free_gb': usage.free / (1024**3),
+            'total_gb': usage.total / (1024**3),
+            'percent_used': (usage.used / usage.total) * 100
+        }
+    except Exception as e:
+        logging.error(f"Erro ao verificar espaço em disco: {e}")
+        return None
+
+# ------------ APP PRINCIPAL ------------
 class FirebirdManagerApp(tk.Tk):
     def __init__(self):
         super().__init__()
         
         self.logger = setup_logging()
+        self.notifications = NotificationManager()
 
         self.dev_buffer = ""
         self.dev_mode = False
+        self.scheduled_jobs = []
 
         self.bind_all("<F12>", self._toggle_dev_mode)
         self.bind_all("<Key>", self._capture_secret_key)
         
         try:
-            self.title("Firebird Manager")
-            
-            # Icon app
-            icon_path = BASE_DIR / "images" / "icon.ico"
-            self.iconbitmap(str(icon_path))
-
-            self.geometry("800x700+0+7")
-            self.minsize(700, 680)
-            self.resizable(True, True)
-            self.configure(bg="#f5f5f5")
-            
             self.conf = load_config()
-            self.task_running = False
-
-            self._create_widgets()
-            self.logger.info("Aplicativo iniciado com sucesso")
+            self._setup_ui()
+            self._start_background_tasks()
+            
+            self.logger.info("Firebird Manager iniciado com sucesso")
             
         except Exception as e:
             self.logger.critical(f"Falha crítica ao iniciar aplicação: {e}")
             messagebox.showerror("Erro Fatal", f"Falha ao iniciar aplicação:\n{e}")
             sys.exit(1)
 
-    def _create_widgets(self):
-        # ---- HEADER ----
+    def _setup_ui(self):
+        """Configura interface do usuário"""
+        self.title("Firebird Manager")
+        
+        # Ícone da aplicação
+        icon_path = BASE_DIR / "images" / "icon.ico"
+        if icon_path.exists():
+            self.iconbitmap(str(icon_path))
+
+        self.geometry("900x750+100+50")
+        self.minsize(800, 700)
+        self.configure(bg="#f5f5f5")
+        
+        self.task_running = False
+        
+        self._create_main_interface()
+
+    def _create_main_interface(self):
+        """Cria interface com abas"""
+        # Header
         header_frame = ttk.Frame(self)
-        header_frame.pack(pady=10, fill="x")
+        header_frame.pack(pady=10, fill="x", padx=10)
         
         header = ttk.Label(
             header_frame, 
-            text="🦅 Gerenciador de Backups Firebird",
+            text="Firebird Manager",
             font=("Arial", 16, "bold")
         )
-        header.pack()
+        header.pack(expand=True)
 
-        # ---- BOTÕES PRINCIPAIS ----
-        btn_frame = ttk.LabelFrame(self, text="Ações", padding=10)
+        # Abas
+        self.notebook = ttk.Notebook(self)
+        self.notebook.pack(fill="both", expand=True, padx=10, pady=5)
+        
+        # Cria todas as abas
+        self._create_dashboard_tab()
+        self._create_monitor_tab()
+        self._create_scheduler_tab()
+        self._create_tools_tab()
+        
+        # Footer
+        self._create_footer()
+
+    def _create_dashboard_tab(self):
+        """Cria aba principal"""
+        dashboard_frame = ttk.Frame(self.notebook)
+        self.notebook.add(dashboard_frame, text="Principal")
+        
+        # Botões de ação
+        btn_frame = ttk.LabelFrame(dashboard_frame, text="Ações", padding=10)
         btn_frame.pack(pady=5, padx=10, fill="x")
 
         self.btn_backup = ttk.Button(
-            btn_frame, text="📦 Gerar Backup",
+            btn_frame, 
+            text="📦 Gerar Backup",
             cursor="hand2",
             command=self.backup
         )
         self.btn_restore = ttk.Button(
-            btn_frame, text="♻️ Restaurar Backup", 
+            btn_frame, 
+            text="♻️ Restaurar Backup",
             cursor="hand2",
             command=self.restore
         )
         self.btn_verify = ttk.Button(
-            btn_frame, text="🩺 Verificar Integridade", 
+            btn_frame, 
+            text="🩺 Verificar Integridade",
             cursor="hand2",
             command=self.verify
         )
         self.btn_kill = ttk.Button(
-            btn_frame, text="🔥 Matar Instâncias",
+            btn_frame, 
+            text="🔥 Matar Instâncias",
             cursor="hand2", 
             command=self.kill
         )
         self.btn_config = ttk.Button(
-            btn_frame, text="⚙️ Configurações",
+            btn_frame, 
+            text="⚙️ Configurações",
             cursor="hand2", 
             command=self.config_window
         )
@@ -287,31 +367,31 @@ class FirebirdManagerApp(tk.Tk):
         for i in range(5):
             btn_frame.columnconfigure(i, weight=1)
 
-        # ---- STATUS ----
-        status_frame = ttk.Frame(self)
+        # Status
+        status_frame = ttk.Frame(dashboard_frame)
         status_frame.pack(pady=5, fill="x", padx=10)
         
         self.status_label = ttk.Label(
             status_frame, 
-            text="Pronto para iniciar operações.", 
+            text="Pronto para iniciar operações.",
             foreground="gray",
             font=("Arial", 9)
         )
         self.status_label.pack()
 
-        # ---- BARRA DE PROGRESSO ----
+        # Barra de progresso
         self.progress = ttk.Progressbar(
-            self, 
+            dashboard_frame, 
             mode="indeterminate", 
             length=500
         )
         self.progress.pack(pady=5)
 
-        # ---- LOG ----
-        log_frame = ttk.LabelFrame(self, text="Log de Execução", padding=10)
+        # Log
+        log_frame = ttk.LabelFrame(dashboard_frame, text="Log de Execução", padding=10)
         log_frame.pack(padx=10, pady=10, fill="both", expand=True)
 
-        self.output = scrolledtext.ScrolledText(log_frame)
+        self.output = scrolledtext.ScrolledText(log_frame, height=15)
         self.output.pack(fill="both", expand=True)
       
         self.output.tag_config("success", foreground="green")
@@ -322,11 +402,197 @@ class FirebirdManagerApp(tk.Tk):
 
         self.log("✅ Aplicativo iniciado. Selecione uma ação acima.", "success")
 
-        # ---- RODAPÉ ----
-        APP_VERSION = "2025.10.11.1453"
+    def _create_monitor_tab(self):
+        """Cria aba de monitoramento"""
+        monitor_frame = ttk.Frame(self.notebook)
+        self.notebook.add(monitor_frame, text="Monitor")
+        
+        # Status do servidor
+        server_frame = ttk.LabelFrame(monitor_frame, text="Status do Servidor", padding=10)
+        server_frame.pack(fill="x", padx=10, pady=5)
+        
+        self.server_status = ttk.Label(server_frame, text="🔄 Verificando status...")
+        self.server_status.pack(anchor="w")
+        
+        # Espaço em disco
+        disk_frame = ttk.LabelFrame(monitor_frame, text="Espaço em Disco", padding=10)
+        disk_frame.pack(fill="x", padx=10, pady=5)
+        
+        self.disk_status = ttk.Label(disk_frame, text="🔄 Calculando espaço...")
+        self.disk_status.pack(anchor="w")
+        
+        # Processos
+        processes_frame = ttk.LabelFrame(monitor_frame, text="Processos do Firebird", padding=10)
+        processes_frame.pack(fill="both", expand=True, padx=10, pady=5)
+        
+        # Treeview para processos
+        self.processes_tree = ttk.Treeview(processes_frame, columns=("PID", "Nome", "Status"), show="headings")
+        self.processes_tree.heading("PID", text="PID")
+        self.processes_tree.heading("Nome", text="Nome do Processo")
+        self.processes_tree.heading("Status", text="Status")
+        self.processes_tree.column("PID", width=80)
+        self.processes_tree.column("Nome", width=200)
+        self.processes_tree.column("Status", width=100)
+        
+        scrollbar = ttk.Scrollbar(processes_frame, orient="vertical", command=self.processes_tree.yview)
+        self.processes_tree.configure(yscrollcommand=scrollbar.set)
+        
+        self.processes_tree.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
+        
+        # Botões de controle
+        control_frame = ttk.Frame(monitor_frame)
+        control_frame.pack(fill="x", padx=10, pady=5)
+        
+        ttk.Button(control_frame, text="🔄 Atualizar",cursor="hand2", command=self.refresh_monitor).pack(side="left", padx=5)
+        ttk.Button(control_frame, text="📊 Relatório de Sistema", cursor="hand2", command=self.generate_system_report).pack(side="left", padx=5)
 
+    def _create_scheduler_tab(self):
+        """Cria aba de agendamento"""
+        sched_frame = ttk.Frame(self.notebook)
+        self.notebook.add(sched_frame, text="Agendador")
+        
+        # Formulário de agendamento
+        form_frame = ttk.LabelFrame(sched_frame, text="Novo Agendamento", padding=15)
+        form_frame.pack(fill="x", padx=10, pady=10)
+        
+        # Banco de dados
+        ttk.Label(form_frame, text="Banco de dados:").grid(row=0, column=0, sticky="w", pady=8)
+        self.sched_db_var = tk.StringVar()
+        self.sched_db_entry = ttk.Entry(form_frame, textvariable=self.sched_db_var, width=40)
+        self.sched_db_entry.grid(row=0, column=1, padx=5)
+        ttk.Button(form_frame, text="...", width=3, command=self.pick_sched_db).grid(row=0, column=2)
+        
+        # Nome do agendamento
+        ttk.Label(form_frame, text="Nome do agendamento:").grid(row=1, column=0, sticky="w", pady=8)
+        self.sched_name_var = tk.StringVar()
+        ttk.Entry(form_frame, textvariable=self.sched_name_var, width=40).grid(row=1, column=1, padx=5)
+        
+        # Frequência
+        ttk.Label(form_frame, text="Frequência:").grid(row=2, column=0, sticky="w", pady=8)
+        self.sched_freq_var = tk.StringVar(value="Diário")
+        freq_combo = ttk.Combobox(form_frame, textvariable=self.sched_freq_var, 
+                                 values=["Diário", "Semanal", "Mensal"], state="readonly")
+        freq_combo.grid(row=2, column=1, padx=5, sticky="w")
+        
+        # Horário
+        ttk.Label(form_frame, text="Horário (HH:MM):").grid(row=3, column=0, sticky="w", pady=8)
+        self.sched_time_var = tk.StringVar(value="02:00")
+        ttk.Entry(form_frame, textvariable=self.sched_time_var, width=10).grid(row=3, column=1, padx=5, sticky="w")
+        
+        # Botão de agendamento
+        ttk.Button(form_frame, text="➕ Agendar Backup", 
+                  cursor="hand2",
+                  command=self.schedule_backup).grid(row=4, column=1, pady=15, sticky="w")
+        
+        # Lista de agendamentos
+        list_frame = ttk.LabelFrame(sched_frame, text="Agendamentos Ativos", padding=10)
+        list_frame.pack(fill="both", expand=True, padx=10, pady=10)
+        
+        self.schedules_tree = ttk.Treeview(list_frame, columns=("Nome", "Banco", "Frequência", "Horário"), show="headings")
+        self.schedules_tree.heading("Nome", text="Nome")
+        self.schedules_tree.heading("Banco", text="Banco de Dados")
+        self.schedules_tree.heading("Frequência", text="Frequência")
+        self.schedules_tree.heading("Horário", text="Horário")
+        
+        self.schedules_tree.column("Nome", width=150)
+        self.schedules_tree.column("Banco", width=200)
+        self.schedules_tree.column("Frequência", width=100)
+        self.schedules_tree.column("Horário", width=80)
+        
+        scrollbar = ttk.Scrollbar(list_frame, orient="vertical", command=self.schedules_tree.yview)
+        self.schedules_tree.configure(yscrollcommand=scrollbar.set)
+        
+        self.schedules_tree.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
+        
+        # Botões de controle
+        control_frame = ttk.Frame(list_frame)
+        control_frame.pack(fill="x", pady=5)
+        
+        ttk.Button(control_frame, text="🗑️ Remover Selecionado",
+                  cursor="hand2", 
+                  command=self.remove_schedule).pack(side="left", padx=5)
+
+    def _create_tools_tab(self):
+        """Cria aba de ferramentas avançadas"""
+        tools_frame = ttk.Frame(self.notebook)
+        self.notebook.add(tools_frame, text="Ferramentas")
+        
+        # Frame de ferramentas
+        tools_grid = ttk.Frame(tools_frame, padding=20)
+        tools_grid.pack(fill="both", expand=True)
+        
+        # Otimização
+        optimize_btn = ttk.Button(
+            tools_grid, 
+            text="🔧 Otimizar Banco",
+            cursor="hand2", 
+            command=self.optimize_database,
+            width=20
+        )
+        optimize_btn.grid(row=0, column=0, padx=10, pady=10, sticky="ew")
+        
+        # Migração
+        migrate_btn = ttk.Button(
+            tools_grid, 
+            text="🔄 Migrar Banco",
+            cursor="hand2", 
+            command=self.migrate_database,
+            width=20
+        )
+        migrate_btn.grid(row=0, column=1, padx=10, pady=10, sticky="ew")
+        
+        # Relatório
+        report_btn = ttk.Button(
+            tools_grid, 
+            text="📊 Gerar Relatório",
+            cursor="hand2", 
+            command=self.generate_system_report,
+            width=20
+        )
+        report_btn.grid(row=1, column=0, padx=10, pady=10, sticky="ew")
+        
+        # Exportar configurações
+        export_btn = ttk.Button(
+            tools_grid, 
+            text="📤 Exportar Config",
+            cursor="hand2", 
+            command=self.export_config,
+            width=20
+        )
+        export_btn.grid(row=1, column=1, padx=10, pady=10, sticky="ew")
+        
+        # Importar configurações
+        import_btn = ttk.Button(
+            tools_grid, 
+            text="📥 Importar Config",
+            cursor="hand2", 
+            command=self.import_config,
+            width=20
+        )
+        import_btn.grid(row=2, column=0, padx=10, pady=10, sticky="ew")
+        
+        # Verificar espaço
+        space_btn = ttk.Button(
+            tools_grid, 
+            text="💾 Verificar Espaço",
+            cursor="hand2", 
+            command=self.check_disk_space,
+            width=20
+        )
+        space_btn.grid(row=2, column=1, padx=10, pady=10, sticky="ew")
+        
+        # Configurar colunas
+        tools_grid.columnconfigure(0, weight=1)
+        tools_grid.columnconfigure(1, weight=1)
+
+    def _create_footer(self):
+        """Cria rodapé da aplicação"""
         footer_frame = tk.Frame(self, bg="#f5f5f5", relief="ridge", borderwidth=1)
         footer_frame.pack(side="bottom", fill="x")
+        
+        APP_VERSION = "2025.10.11.1453"
 
         footer_left = tk.Label(
             footer_frame,
@@ -348,9 +614,13 @@ class FirebirdManagerApp(tk.Tk):
         )
         footer_right.pack(side="right", padx=10, pady=3)
 
+    def _start_background_tasks(self):
+        """Inicia tarefas em background"""
+        if self.conf.get("auto_monitor", True):
+            self.after(5000, self.auto_refresh_monitor)
+
     # ---------- UTILIDADES ----------
     def log(self, msg, tag="info"):
-
         timestamp = datetime.now().strftime("%H:%M:%S")
         log_entry = f"[{timestamp}] {msg}\n"
         
@@ -367,7 +637,7 @@ class FirebirdManagerApp(tk.Tk):
             self.logger.info(msg)
 
     def set_status(self, text, color="gray"):
-
+        """Atualiza status da aplicação"""
         self.status_label.config(text=text, foreground=color)
         self.update_idletasks()
 
@@ -382,6 +652,11 @@ class FirebirdManagerApp(tk.Tk):
         buttons = [self.btn_backup, self.btn_restore, self.btn_verify, self.btn_kill, self.btn_config]
         for btn in buttons:
             btn.state(["!disabled"])
+
+    def show_notification(self, title, message, duration=5000):
+        """Exibe notificação do sistema"""
+        if self.conf.get("notifications", True):
+            self.notifications.show_notification(title, message, duration)
 
     def _toggle_dev_mode(self, event=None):
         """Ativa/desativa o modo dev"""
@@ -404,7 +679,6 @@ class FirebirdManagerApp(tk.Tk):
         self.dev_buffer = ""
 
     def _cancel_dev_mode(self):
-        """Cancela o modo secreto automaticamente após o tempo limite"""
         self.dev_mode = False
         self.dev_buffer = ""
 
@@ -417,10 +691,9 @@ class FirebirdManagerApp(tk.Tk):
             else:
                 self.dev_buffer += event.char
 
-    # ---------- EXECUÇÃO ----------
+    # ---------- EXECUÇÃO DE COMANDOS ----------
     def run_command(self, cmd, on_finish=None):
-        import threading
-
+        """Executa comandos em thread separada"""
         def worker():
             self.task_running = True
             self.disable_buttons()
@@ -453,9 +726,11 @@ class FirebirdManagerApp(tk.Tk):
                     self.set_status("✅ Operação concluída com sucesso!", "green")
                     self.log("✔️ Comando executado com sucesso.", "success")
                     self.bell()
+                    self.show_notification("Firebird Manager", "Operação concluída com sucesso!")
                 else:
                     self.set_status("⚠️ Ocorreu um erro. Veja o log abaixo.", "red")
                     self.log(f"⚠️ Comando retornou código de erro: {return_code}", "error")
+                    self.show_notification("Firebird Manager", "Ocorreu um erro na operação!")
 
             except FileNotFoundError:
                 error_msg = "Erro: Arquivo executável não encontrado. Verifique as configurações."
@@ -474,7 +749,7 @@ class FirebirdManagerApp(tk.Tk):
 
         threading.Thread(target=worker, daemon=True).start()
 
-    # ---------- AÇÕES ----------
+    # ---------- FUNÇÕES PRINCIPAIS ----------
     def backup(self):
         """Gera backup do banco de dados"""
         gbak = self.conf.get("gbak_path") or find_executable("gbak.exe")
@@ -658,119 +933,474 @@ class FirebirdManagerApp(tk.Tk):
         threading.Thread(target=kill_processes, daemon=True).start()
 
     def _on_kill_complete(self, success):
-
+        """Callback após finalizar processos"""
         if success:
             self.set_status("✅ Processos do Firebird finalizados!", "green")
             self.log("✅ Todos os processos do Firebird foram finalizados com sucesso.", "success")
+            self.show_notification("Firebird Manager", "Processos do Firebird finalizados!")
         else:
             self.set_status("ℹ️ Nenhum processo do Firebird encontrado ou erro ao finalizar.", "blue")
             self.log("ℹ️ Nenhum processo do Firebird em execução ou erro ao finalizar.", "info")
 
-    # ---------- JANELA DE CONFIG ----------
-    def config_window(self):
+    # ---------- MONITORAMENTO ----------
+    def refresh_monitor(self):
+        """Atualiza informações do monitor"""
+        try:
+            # Atualiza status do servidor
+            self._update_server_status()
+            
+            # Atualiza espaço em disco
+            self._update_disk_space()
+            
+            # Atualiza lista de processos
+            self._update_processes_list()
+            
+        except Exception as e:
+            self.log(f"❌ Erro ao atualizar monitor: {e}", "error")
+
+    def _update_server_status(self):
+        """Atualiza status do servidor Firebird"""
+        try:
+            # Verifica se o serviço está rodando
+            firebird_processes = []
+            for proc in psutil.process_iter(['name']):
+                if proc.info['name'] and any(fb in proc.info['name'].lower() 
+                                           for fb in ['firebird', 'fb_inet', 'fbserver']):
+                    firebird_processes.append(proc.info['name'])
+            
+            if firebird_processes:
+                status = f"✅ Online - Processos: {', '.join(set(firebird_processes))}"
+            else:
+                status = "❌ Offline - Nenhum processo encontrado"
+                
+            self.server_status.config(text=status)
+            
+        except Exception as e:
+            self.server_status.config(text=f"❌ Erro: {str(e)}")
+
+    def _update_disk_space(self):
+        """Atualiza informações de espaço em disco"""
+        try:
+            backup_dir = Path(self.conf.get("backup_dir", DEFAULT_BACKUP_DIR))
+            disk_info = get_disk_space(backup_dir)
+            
+            if disk_info:
+                status = (f"💾 Total: {disk_info['total_gb']:.1f}GB | "
+                         f"Livre: {disk_info['free_gb']:.1f}GB | "
+                         f"Usado: {disk_info['percent_used']:.1f}%")
+                
+                if disk_info['free_gb'] < 1:
+                    status += " ⚠️ ESPAÇO CRÍTICO"
+                elif disk_info['free_gb'] < 5:
+                    status += " ⚠️ Espaço limitado"
+                    
+                self.disk_status.config(text=status)
+            else:
+                self.disk_status.config(text="❌ Erro ao verificar espaço")
+                
+        except Exception as e:
+            self.disk_status.config(text=f"❌ Erro: {str(e)}")
+
+    def _update_processes_list(self):
+        """Atualiza lista de processos do Firebird"""
+        try:
+            # Limpa lista atual
+            for item in self.processes_tree.get_children():
+                self.processes_tree.delete(item)
+            
+            # Adiciona processos
+            firebird_processes = [
+                "fb_inet_server.exe", "fbserver.exe", "fbguard.exe", 
+                "firebird.exe", "ibserver.exe", "gbak.exe", "gfix.exe"
+            ]
+            
+            for proc in psutil.process_iter(['pid', 'name', 'status']):
+                try:
+                    proc_name = proc.info['name'].lower() if proc.info['name'] else ''
+                    if any(fb_proc in proc_name for fb_proc in [p.lower() for p in firebird_processes]):
+                        self.processes_tree.insert("", "end", values=(
+                            proc.info['pid'],
+                            proc.info['name'],
+                            proc.info['status']
+                        ))
+                except (psutil.NoSuchProcess, psutil.AccessDenied):
+                    continue
+                    
+        except Exception as e:
+            self.log(f"❌ Erro ao atualizar processos: {e}", "error")
+
+    def auto_refresh_monitor(self):
+        """Atualização automática do monitor"""
+        if self.conf.get("auto_monitor", True):
+            self.refresh_monitor()
+            interval = int(self.conf.get("monitor_interval", 30)) * 1000
+            self.after(interval, self.auto_refresh_monitor)
+
+    # ---------- AGENDAMENTO ----------
+    def pick_sched_db(self):
+        """Seleciona banco para agendamento"""
+        db = filedialog.askopenfilename(
+            title="Selecione o banco para agendamento",
+            filetypes=[("Firebird Database", "*.fdb")]
+        )
+        if db:
+            self.sched_db_var.set(db)
+
+    def schedule_backup(self):
+        """Cria novo agendamento de backup"""
+        if not all([self.sched_db_var.get(), self.sched_name_var.get(), self.sched_time_var.get()]):
+            messagebox.showerror("Erro", "Preencha todos os campos obrigatórios.")
+            return
         
+        # Adiciona à lista
+        self.schedules_tree.insert("", "end", values=(
+            self.sched_name_var.get(),
+            Path(self.sched_db_var.get()).name,
+            self.sched_freq_var.get(),
+            self.sched_time_var.get()
+        ))
+        
+        # Limpa campos
+        self.sched_name_var.set("")
+        self.sched_db_var.set("")
+        self.sched_time_var.set("02:00")
+        
+        self.log(f"📅 Agendamento criado: {self.sched_name_var.get()}", "success")
+        self.show_notification("Firebird Manager", "Novo agendamento criado!")
+
+    def remove_schedule(self):
+        """Remove agendamento selecionado"""
+        selection = self.schedules_tree.selection()
+        if not selection:
+            messagebox.showwarning("Aviso", "Selecione um agendamento para remover.")
+            return
+        
+        for item in selection:
+            values = self.schedules_tree.item(item, "values")
+            self.schedules_tree.delete(item)
+            self.log(f"🗑️ Agendamento removido: {values[0]}", "info")
+
+    # ---------- FERRAMENTAS AVANÇADAS ----------
+    def optimize_database(self):
+        """Executa operações de otimização no banco"""
+        gfix = self.conf.get("gfix_path") or find_executable("gfix.exe")
+        if not gfix:
+            messagebox.showerror("Erro", "gfix.exe não encontrado.")
+            return
+        
+        db = filedialog.askopenfilename(title="Selecione o banco para otimizar")
+        if not db:
+            return
+        
+        self.log("🔧 Iniciando otimização do banco...", "info")
+        
+        # Comandos de otimização
+        commands = [
+            [gfix, "-sweep", db, "-user", self.conf["firebird_user"], "-pass", self.conf["firebird_password"]],
+            [gfix, "-mend", db, "-user", self.conf["firebird_user"], "-pass", self.conf["firebird_password"]],
+        ]
+        
+        def run_next_command(index=0):
+            if index < len(commands):
+                self.run_command(commands[index], lambda: run_next_command(index + 1))
+            else:
+                self.log("✅ Otimização concluída com sucesso!", "success")
+                self.show_notification("Firebird Manager", "Otimização do banco concluída!")
+        
+        run_next_command()
+
+    def migrate_database(self):
+        """Migra banco entre versões do Firebird"""
+        gbak = self.conf.get("gbak_path") or find_executable("gbak.exe")
+        if not gbak:
+            messagebox.showerror("Erro", "gbak.exe não encontrado.")
+            return
+        
+        source_db = filedialog.askopenfilename(title="Selecione o banco para migrar")
+        if not source_db:
+            return
+        
+        target_version = simpledialog.askstring("Migração", "Versão destino (2.5, 3.0, 4.0):")
+        if not target_version:
+            return
+        
+        backup_dir = Path(self.conf.get("backup_dir", DEFAULT_BACKUP_DIR))
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        backup_file = backup_dir / f"migration_backup_{timestamp}.fbk"
+        migrated_file = backup_dir / f"migrated_v{target_version}_{Path(source_db).name}"
+        
+        self.log(f"🔄 Iniciando migração para v{target_version}...", "info")
+        
+        # Backup
+        backup_cmd = [
+            gbak, "-b", source_db, str(backup_file),
+            "-user", self.conf["firebird_user"], "-pass", self.conf["firebird_password"]
+        ]
+        
+        # Restauração
+        restore_cmd = [
+            gbak, "-c", str(backup_file), str(migrated_file),
+            "-user", self.conf["firebird_user"], "-pass", self.conf["firebird_password"], "-rep"
+        ]
+        
+        def after_backup():
+            self.log("✅ Backup para migração concluído", "success")
+            self.run_command(restore_cmd, after_restore)
+        
+        def after_restore():
+            self.log(f"✅ Migração concluída: {migrated_file}", "success")
+            # Limpa backup temporário
+            try:
+                backup_file.unlink()
+            except:
+                pass
+            self.show_notification("Firebird Manager", "Migração do banco concluída!")
+        
+        self.run_command(backup_cmd, after_backup)
+
+    def generate_system_report(self):
+        """Gera relatório detalhado do sistema"""
+        try:
+            report = []
+            report.append("=" * 50)
+            report.append("RELATÓRIO DO SISTEMA FIREDBIRD MANAGER")
+            report.append(f"Gerado em: {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}")
+            report.append("=" * 50)
+            
+            # Informações do sistema
+            report.append("\n📊 INFORMAÇÕES DO SISTEMA:")
+            report.append(f"- Diretório base: {BASE_DIR}")
+            report.append(f"- Diretório de backups: {self.conf.get('backup_dir', 'Não definido')}")
+            
+            # Espaço em disco
+            backup_dir = Path(self.conf.get("backup_dir", DEFAULT_BACKUP_DIR))
+            disk_info = get_disk_space(backup_dir)
+            if disk_info:
+                report.append(f"- Espaço total: {disk_info['total_gb']:.1f} GB")
+                report.append(f"- Espaço livre: {disk_info['free_gb']:.1f} GB")
+                report.append(f"- Espaço usado: {disk_info['percent_used']:.1f}%")
+            
+            # Processos Firebird
+            fb_processes = self._get_firebird_processes()
+            report.append(f"\n🔥 PROCESSOS FIREBIRD: {len(fb_processes)} encontrados")
+            for proc in fb_processes:
+                report.append(f"  - {proc['name']} (PID: {proc['pid']})")
+            
+            # Backups
+            backup_files = list(Path(self.conf.get("backup_dir", DEFAULT_BACKUP_DIR)).glob("*.fbk")) + \
+                          list(Path(self.conf.get("backup_dir", DEFAULT_BACKUP_DIR)).glob("*.zip"))
+            report.append(f"\n📦 BACKUPS: {len(backup_files)} arquivos")
+            if backup_files:
+                latest = max(backup_files, key=lambda f: f.stat().st_mtime)
+                report.append(f"- Último backup: {latest.name}")
+                report.append(f"  Gerado em: {datetime.fromtimestamp(latest.stat().st_mtime).strftime('%d/%m/%Y %H:%M')}")
+            
+            # Salva relatório
+            report_path = BASE_DIR / f"relatorio_sistema_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
+            with open(report_path, 'w', encoding='utf-8') as f:
+                f.write('\n'.join(report))
+            
+            self.log(f"📊 Relatório gerado: {report_path}", "success")
+            messagebox.showinfo("Relatório", f"Relatório salvo em:\n{report_path}")
+            
+        except Exception as e:
+            self.log(f"❌ Erro ao gerar relatório: {e}", "error")
+
+    def _get_firebird_processes(self):
+        """Retorna lista de processos do Firebird"""
+        processes = []
+        firebird_procs = ["fb_inet_server.exe", "fbserver.exe", "fbguard.exe", "firebird.exe", "ibserver.exe"]
+        
+        for proc in psutil.process_iter(['pid', 'name']):
+            if proc.info['name'] and any(fb in proc.info['name'].lower() for fb in [p.lower() for p in firebird_procs]):
+                processes.append({
+                    'pid': proc.info['pid'],
+                    'name': proc.info['name']
+                })
+        
+        return processes
+
+    def check_disk_space(self):
+        """Verifica e alerta sobre espaço em disco"""
+        backup_dir = Path(self.conf.get("backup_dir", DEFAULT_BACKUP_DIR))
+        disk_info = get_disk_space(backup_dir)
+        
+        if disk_info:
+            free_gb = disk_info['free_gb']
+            
+            if free_gb < 1:
+                msg = f"🚨 ESPAÇO CRÍTICO! Apenas {free_gb:.1f}GB livres!"
+                self.log(msg, "error")
+                messagebox.showwarning("Espaço em Disco", msg)
+            elif free_gb < 5:
+                msg = f"⚠️ Espaço limitado: {free_gb:.1f}GB livres"
+                self.log(msg, "warning")
+                messagebox.showwarning("Espaço em Disco", msg)
+            else:
+                msg = f"✅ Espaço suficiente: {free_gb:.1f}GB livres"
+                self.log(msg, "success")
+                messagebox.showinfo("Espaço em Disco", msg)
+        else:
+            messagebox.showerror("Erro", "Não foi possível verificar o espaço em disco.")
+
+    def export_config(self):
+        """Exporta configurações para arquivo"""
+        config_file = filedialog.asksaveasfilename(
+            defaultextension=".json",
+            filetypes=[("JSON files", "*.json"), ("Todos os arquivos", "*.*")]
+        )
+        if config_file:
+            try:
+                with open(config_file, 'w', encoding='utf-8') as f:
+                    json.dump(self.conf, f, indent=2, ensure_ascii=False)
+                self.log(f"📤 Configurações exportadas: {config_file}", "success")
+                messagebox.showinfo("Exportar", "Configurações exportadas com sucesso!")
+            except Exception as e:
+                self.log(f"❌ Erro ao exportar configurações: {e}", "error")
+                messagebox.showerror("Erro", f"Falha ao exportar:\n{e}")
+
+    def import_config(self):
+        """Importa configurações de arquivo"""
+        config_file = filedialog.askopenfilename(
+            filetypes=[("JSON files", "*.json"), ("Todos os arquivos", "*.*")]
+        )
+        if config_file:
+            try:
+                with open(config_file, 'r', encoding='utf-8') as f:
+                    new_conf = json.load(f)
+                
+                keep_keys = ['backup_dir', 'gbak_path', 'gfix_path']
+                for key in keep_keys:
+                    if key in self.conf:
+                        new_conf[key] = self.conf[key]
+                
+                self.conf.update(new_conf)
+                save_config(self.conf)
+                
+                self.log("📥 Configurações importadas com sucesso", "success")
+                messagebox.showinfo("Importar", 
+                                  "Configurações importadas com sucesso!\n"
+                                  "Reinicie o aplicativo para aplicar todas as mudanças.")
+                                  
+            except Exception as e:
+                self.log(f"❌ Erro ao importar configurações: {e}", "error")
+                messagebox.showerror("Erro", f"Falha ao importar:\n{e}")
+
+    # ---------- CONFIGURAÇÕES ----------
+    def config_window(self):
+        """Janela de configurações"""
         win = tk.Toplevel(self)
         win.title("Configurações do Sistema")
-
-        # Icon config window
-        icon_path = BASE_DIR / "images" / "icon.ico"
-        win.iconbitmap(str(icon_path))
-
-        self.update_idletasks()
-
-        largura_janela = 500
-        altura_janela = 400
-
-        largura_principal = self.winfo_width()
-        altura_principal = self.winfo_height()
-        x_principal = self.winfo_x()
-        y_principal = self.winfo_y()
-
-        # calcula posição centralizada
-        x = x_principal + (largura_principal // 2) - (largura_janela // 2)
-        y = y_principal + (altura_principal // 2) - (altura_janela // 2)
-
-        win.geometry(f"{largura_janela}x{altura_janela}+{x}+{y}")
-
+        win.geometry("500x500")
         win.resizable(False, False)
         win.transient(self)
         win.grab_set()
 
-        main_frame = ttk.Frame(win, padding=20)
-        main_frame.pack(fill="both", expand=True)
+        # Centraliza
+        self.update_idletasks()
+        x = self.winfo_x() + (self.winfo_width() // 2) - 250
+        y = self.winfo_y() + (self.winfo_height() // 2) - 250
+        win.geometry(f"+{x}+{y}")
 
-        # Configurações de caminho
-        ttk.Label(main_frame, text="Local do gbak.exe:").grid(row=0, column=0, sticky="w", pady=8)
+        # Ícone
+        icon_path = BASE_DIR / "images" / "icon.ico"
+        if icon_path.exists():
+            win.iconbitmap(str(icon_path))
+
+        notebook = ttk.Notebook(win)
+        notebook.pack(fill="both", expand=True, padx=10, pady=10)
+
+        # Aba Firebird
+        firebird_frame = ttk.Frame(notebook, padding=10)
+        notebook.add(firebird_frame, text="Firebird")
+
+        ttk.Label(firebird_frame, text="Local do gbak.exe:").grid(row=0, column=0, sticky="w", pady=8)
         gbak_var = tk.StringVar(value=self.conf.get("gbak_path", ""))
-        gbak_entry = ttk.Entry(main_frame, textvariable=gbak_var, width=40)
+        gbak_entry = ttk.Entry(firebird_frame, textvariable=gbak_var, width=40)
         gbak_entry.grid(row=0, column=1, padx=5)
-        ttk.Button(main_frame, text="...", width=3, 
+        ttk.Button(firebird_frame, text="...", width=3, 
                   command=lambda: self.pick_exe(gbak_var, "gbak.exe")).grid(row=0, column=2)
 
-        ttk.Label(main_frame, text="Local do gfix.exe:").grid(row=1, column=0, sticky="w", pady=8)
+        ttk.Label(firebird_frame, text="Local do gfix.exe:").grid(row=1, column=0, sticky="w", pady=8)
         gfix_var = tk.StringVar(value=self.conf.get("gfix_path", ""))
-        gfix_entry = ttk.Entry(main_frame, textvariable=gfix_var, width=40)
+        gfix_entry = ttk.Entry(firebird_frame, textvariable=gfix_var, width=40)
         gfix_entry.grid(row=1, column=1, padx=5)
-        ttk.Button(main_frame, text="...", width=3,
+        ttk.Button(firebird_frame, text="...", width=3,
                   command=lambda: self.pick_exe(gfix_var, "gfix.exe")).grid(row=1, column=2)
 
-        ttk.Label(main_frame, text="Pasta de backups:").grid(row=2, column=0, sticky="w", pady=8)
+        ttk.Label(firebird_frame, text="Pasta de backups:").grid(row=2, column=0, sticky="w", pady=8)
         backup_var = tk.StringVar(value=self.conf.get("backup_dir", ""))
-        backup_entry = ttk.Entry(main_frame, textvariable=backup_var, width=40)
+        backup_entry = ttk.Entry(firebird_frame, textvariable=backup_var, width=40)
         backup_entry.grid(row=2, column=1, padx=5)
-        ttk.Button(main_frame, text="...", width=3,
+        ttk.Button(firebird_frame, text="...", width=3,
                   command=lambda: self.pick_dir(backup_var)).grid(row=2, column=2)
 
-        # Configurações do Firebird
-        ttk.Label(main_frame, text="Host do Firebird:").grid(row=3, column=0, sticky="w", pady=8)
+        ttk.Label(firebird_frame, text="Host do Firebird:").grid(row=3, column=0, sticky="w", pady=8)
         host_var = tk.StringVar(value=self.conf.get("firebird_host", "localhost"))
-        ttk.Entry(main_frame, textvariable=host_var, width=40).grid(row=3, column=1, padx=5)
+        ttk.Entry(firebird_frame, textvariable=host_var, width=40).grid(row=3, column=1, padx=5)
 
-        ttk.Label(main_frame, text="Usuário:").grid(row=4, column=0, sticky="w", pady=8)
+        ttk.Label(firebird_frame, text="Usuário:").grid(row=4, column=0, sticky="w", pady=8)
         user_var = tk.StringVar(value=self.conf.get("firebird_user", "SYSDBA"))
-        ttk.Entry(main_frame, textvariable=user_var, width=40).grid(row=4, column=1, padx=5)
+        ttk.Entry(firebird_frame, textvariable=user_var, width=40).grid(row=4, column=1, padx=5)
 
-        ttk.Label(main_frame, text="Senha:").grid(row=5, column=0, sticky="w", pady=8)
+        ttk.Label(firebird_frame, text="Senha:").grid(row=5, column=0, sticky="w", pady=8)
         pass_var = tk.StringVar(value=self.conf.get("firebird_password", "masterkey"))
-        ttk.Entry(main_frame, textvariable=pass_var, width=40, show="*").grid(row=5, column=1, padx=5)
+        ttk.Entry(firebird_frame, textvariable=pass_var, width=40, show="*").grid(row=5, column=1, padx=5)
 
-        # Configurações de backup
-        ttk.Label(main_frame, text="Qtd. backups a manter:").grid(row=6, column=0, sticky="w", pady=8)
+        ttk.Label(firebird_frame, text="Qtd. backups a manter:").grid(row=6, column=0, sticky="w", pady=8)
         keep_var = tk.IntVar(value=self.conf.get("keep_backups", DEFAULT_KEEP_BACKUPS))
-        ttk.Spinbox(main_frame, from_=1, to=100, textvariable=keep_var, width=10).grid(row=6, column=1, sticky="w", padx=5)
+        ttk.Spinbox(firebird_frame, from_=1, to=100, textvariable=keep_var, width=10).grid(row=6, column=1, sticky="w", padx=5)
+
+        # Aba Sistema
+        system_frame = ttk.Frame(notebook, padding=10)
+        notebook.add(system_frame, text="Sistema")
+
+        ttk.Label(system_frame, text="Monitoramento automático:").grid(row=0, column=0, sticky="w", pady=8)
+        monitor_var = tk.BooleanVar(value=self.conf.get("auto_monitor", True))
+        ttk.Checkbutton(system_frame, variable=monitor_var).grid(row=0, column=1, sticky="w", padx=5)
+
+        ttk.Label(system_frame, text="Intervalo (segundos):").grid(row=1, column=0, sticky="w", pady=8)
+        interval_var = tk.IntVar(value=self.conf.get("monitor_interval", 30))
+        ttk.Spinbox(system_frame, from_=10, to=300, textvariable=interval_var, width=10).grid(row=1, column=1, sticky="w", padx=5)
+
+        ttk.Label(system_frame, text="Notificações:").grid(row=2, column=0, sticky="w", pady=8)
+        notif_var = tk.BooleanVar(value=self.conf.get("notifications", True))
+        ttk.Checkbutton(system_frame, variable=notif_var).grid(row=2, column=1, sticky="w", padx=5)
 
         # Botões
-        btn_frame = ttk.Frame(main_frame)
-        btn_frame.grid(row=7, column=0, columnspan=3, pady=20)
+        btn_frame = ttk.Frame(win)
+        btn_frame.pack(pady=10)
 
-        ttk.Button(btn_frame, text="Salvar Configurações", 
-                    command=lambda: self.save_config_from_window(
-                        win, gbak_var, gfix_var, backup_var, host_var, user_var, pass_var, keep_var
-                    ),
-                    cursor="hand2"
-                  ).pack(side="left", padx=10)
+        def save_all_config():
+            self.conf.update({
+                "gbak_path": gbak_var.get(),
+                "gfix_path": gfix_var.get(),
+                "backup_dir": backup_var.get(),
+                "firebird_host": host_var.get(),
+                "firebird_user": user_var.get(),
+                "firebird_password": pass_var.get(),
+                "keep_backups": keep_var.get(),
+                "auto_monitor": monitor_var.get(),
+                "monitor_interval": interval_var.get(),
+                "notifications": notif_var.get()
+            })
+            
+            if save_config(self.conf):
+                messagebox.showinfo("Configurações", "Configurações salvas com sucesso!")
+                win.destroy()
+            else:
+                messagebox.showerror("Erro", "Falha ao salvar configurações!")
+
+        ttk.Button(btn_frame, text="💾 Salvar Tudo", 
+                  command=save_all_config,
+                  cursor="hand2").pack(side="left", padx=10)
         
-        ttk.Button(btn_frame, text="Cancelar", 
+        ttk.Button(btn_frame, text="❌ Cancelar", 
                   command=win.destroy,
-                  cursor="hand2"
-                  ).pack(side="left", padx=10)
-
-    def save_config_from_window(self, win, gbak_var, gfix_var, backup_var, host_var, user_var, pass_var, keep_var):
-        self.conf.update({
-            "gbak_path": gbak_var.get(),
-            "gfix_path": gfix_var.get(),
-            "backup_dir": backup_var.get(),
-            "firebird_host": host_var.get(),
-            "firebird_user": user_var.get(),
-            "firebird_password": pass_var.get(),
-            "keep_backups": keep_var.get()
-        })
-        
-        save_config(self.conf)
-        messagebox.showinfo("Configurações", "Configurações salvas com sucesso!")
-        win.destroy()
+                  cursor="hand2").pack(side="left", padx=10)
 
     def pick_exe(self, var, exe_name):
+        """Seleciona executável"""
         path = filedialog.askopenfilename(
             title=f"Selecione {exe_name}", 
             filetypes=[("Executável", "*.exe"), ("Todos os arquivos", "*.*")]
@@ -779,34 +1409,35 @@ class FirebirdManagerApp(tk.Tk):
             var.set(path)
 
     def pick_dir(self, var):
-        path = filedialog.askdirectory(title="Selecione diretório de backups")
+        """Seleciona diretório"""
+        path = filedialog.askdirectory(title="Selecione diretório")
         if path:
             var.set(path)
 
-    # Janela de execução de script
+    # ---------- CONSOLE DE DESENVOLVIMENTO ----------
     def open_script_console(self):
-        """Abre uma janela para executar scripts Python dentro do app"""
+        """Abre console de desenvolvimento"""
         win = tk.Toplevel(self)
-        win.title("Execução de Scripts")
-
-        # Icon dev window
-        icon_path = BASE_DIR / "images" / "icon.ico"
-        win.iconbitmap(str(icon_path))
-
+        win.title("Console de Desenvolvimento")
         win.geometry("700x500")
-        win.minsize(700, 500)
+        win.minsize(600, 400)
 
         # Centraliza
         self.update_idletasks()
         x = self.winfo_x() + (self.winfo_width() // 2) - 350
-        y = self.winfo_y() + (self.winfo_height() // 2) - 200
+        y = self.winfo_y() + (self.winfo_height() // 2) - 250
         win.geometry(f"+{x}+{y}")
+
+        # Ícone
+        icon_path = BASE_DIR / "images" / "icon.ico"
+        if icon_path.exists():
+            win.iconbitmap(str(icon_path))
 
         win.transient(self)
         win.grab_set()
         win.focus_force()
 
-        ttk.Label(win, text="Digite código Python e clique em 'Executar' ou pressione 'Shift + Enter':").pack(pady=5)
+        ttk.Label(win, text="Console de Desenvolvimento - Execute código Python:").pack(pady=5)
 
         text = scrolledtext.ScrolledText(win, height=15, width=80, font=("Consolas", 10))
         text.pack(padx=10, pady=5, fill="both", expand=True)
@@ -820,19 +1451,27 @@ class FirebirdManagerApp(tk.Tk):
             if not code:
                 return
             try:
-                local_vars = {"app": self, "config": self.conf, "Path": Path}
+                local_vars = {
+                    'app': self,
+                    'config': self.conf,
+                    'Path': Path,
+                    'tk': tk,
+                    'ttk': ttk,
+                    'messagebox': messagebox,
+                    'filedialog': filedialog
+                }
                 exec(code, globals(), local_vars)
-                output.insert(tk.END, "✅ Execução concluída.\n")
+                output.insert(tk.END, "✅ Execução concluída com sucesso.\n")
             except Exception as e:
                 output.insert(tk.END, f"❌ Erro: {e}\n")
 
-        # Botão
-        ttk.Button(win, text="Executar Script", command=run_script, cursor="hand2").pack(pady=5)
+        # Botão executar
+        ttk.Button(win, text="▶️ Executar Script", command=run_script, cursor="hand2").pack(pady=5)
 
-        # ⚡ Atalho Shift + Enter
+        # Atalho Shift + Enter
         text.bind("<Shift-Return>", run_script)
 
-        self.log("🧩 Console secreto de scripts aberto.", "info")
+        self.log("🧩 Console de desenvolvimento aberto.", "info")
 
         def on_close():
             self.dev_mode = False
@@ -844,7 +1483,7 @@ class FirebirdManagerApp(tk.Tk):
 # ---------- MAIN ----------
 if __name__ == "__main__":
     try:
-        # Solicitar modo administrador se necessário
+        # Verificar permissões de administrador
         if not is_admin():
             response = messagebox.askyesno(
                 "Permissão de Administrador",
@@ -854,7 +1493,8 @@ if __name__ == "__main__":
                 icon=messagebox.WARNING
             )
             if response:
-                run_as_admin()
+                if not run_as_admin():
+                    sys.exit(1)
             else:
                 messagebox.showinfo(
                     "Informação",
@@ -862,9 +1502,11 @@ if __name__ == "__main__":
                     "sem permissões de administrador."
                 )
         
+        # Iniciar aplicação
         app = FirebirdManagerApp()
         app.mainloop()
         
     except Exception as e:
         print(f"Erro fatal: {e}")
         messagebox.showerror("Erro Fatal", f"Falha ao iniciar aplicação:\n{e}")
+        sys.exit(1)
