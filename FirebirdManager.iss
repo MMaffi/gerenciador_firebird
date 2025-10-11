@@ -5,7 +5,7 @@
 
 [Setup]
 AppName=Firebird Manager
-AppVersion=1.0.0
+AppVersion=2025.10.11.1453
 DefaultDirName=C:\FirebirdManager
 DefaultGroupName=Firebird Manager
 OutputDir=.

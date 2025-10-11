@@ -323,7 +323,7 @@ class FirebirdManagerApp(tk.Tk):
         self.log("✅ Aplicativo iniciado. Selecione uma ação acima.", "success")
 
         # ---- RODAPÉ ----
-        APP_VERSION = "1.0.0"
+        APP_VERSION = "2025.10.11.1453"
 
         footer_frame = tk.Frame(self, bg="#f5f5f5", relief="ridge", borderwidth=1)
         footer_frame.pack(side="bottom", fill="x")
