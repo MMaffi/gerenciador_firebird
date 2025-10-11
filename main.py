@@ -373,6 +373,7 @@ class FirebirdManagerApp(tk.Tk):
 
     # ---------- EXECUÇÃO ----------
     def run_command(self, cmd, on_finish=None):
+        import threading
 
         def worker():
             self.task_running = True
@@ -382,20 +383,23 @@ class FirebirdManagerApp(tk.Tk):
 
             try:
                 self.log(f"Executando comando: {' '.join(cmd)}", "debug")
-                
+
+                CREATE_NO_WINDOW = 0x08000000 if sys.platform == "win32" else 0
+
                 process = subprocess.Popen(
-                    cmd, 
-                    stdout=subprocess.PIPE, 
-                    stderr=subprocess.STDOUT, 
-                    text=True, 
+                    cmd,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    text=True,
                     encoding="utf-8",
-                    errors='replace'
+                    errors='replace',
+                    creationflags=CREATE_NO_WINDOW
                 )
-                
+
                 for line in iter(process.stdout.readline, ''):
                     if line.strip():
                         self.log(line.strip(), "info")
-                
+
                 process.stdout.close()
                 return_code = process.wait()
 
@@ -406,7 +410,7 @@ class FirebirdManagerApp(tk.Tk):
                 else:
                     self.set_status("⚠️ Ocorreu um erro. Veja o log abaixo.", "red")
                     self.log(f"⚠️ Comando retornou código de erro: {return_code}", "error")
-                    
+
             except FileNotFoundError:
                 error_msg = "Erro: Arquivo executável não encontrado. Verifique as configurações."
                 self.log(error_msg, "error")
@@ -421,7 +425,7 @@ class FirebirdManagerApp(tk.Tk):
                 self.task_running = False
                 if on_finish:
                     self.after(100, on_finish)
-                    
+
         threading.Thread(target=worker, daemon=True).start()
 
     # ---------- AÇÕES ----------
