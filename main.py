@@ -271,7 +271,7 @@ class FirebirdManagerApp(tk.Tk):
         
         self.task_running = False
         
-        # Configura o protocolo de fechamento para minimizar para bandeja
+        # Configura fechamento para minimizar para bandeja
         self.protocol("WM_DELETE_WINDOW", self.on_close)
         
         self._create_main_interface()
@@ -289,7 +289,7 @@ class FirebirdManagerApp(tk.Tk):
         )
         header.pack(expand=True)
 
-        # Controles do sistema (minimizar e configurações) - LADO DIREITO
+        # Controles do sistema
         controls_frame = ttk.Frame(header_frame)
         controls_frame.pack(side="right", padx=5)
 
@@ -331,7 +331,7 @@ class FirebirdManagerApp(tk.Tk):
         dashboard_frame = ttk.Frame(self.notebook)
         self.notebook.add(dashboard_frame, text="Principal")
         
-        # Botões de ação (AGORA APENAS 4 BOTÕES)
+        # Botões de ação
         btn_frame = ttk.LabelFrame(dashboard_frame, text="Ações", padding=10)
         btn_frame.pack(pady=5, padx=10, fill="x")
 
@@ -360,13 +360,13 @@ class FirebirdManagerApp(tk.Tk):
             command=self.kill
         )
 
-        # Layout dos botões (APENAS 4 COLUNAS AGORA)
+        # Layout dos botões
         self.btn_backup.grid(row=0, column=0, padx=5, pady=5, sticky="ew")
         self.btn_restore.grid(row=0, column=1, padx=5, pady=5, sticky="ew")
         self.btn_verify.grid(row=0, column=2, padx=5, pady=5, sticky="ew")
         self.btn_kill.grid(row=0, column=3, padx=5, pady=5, sticky="ew")
         
-        for i in range(4):  # AGORA SÃO 4 COLUNAS
+        for i in range(4):
             btn_frame.columnconfigure(i, weight=1)
 
         # Status
@@ -515,7 +515,7 @@ class FirebirdManagerApp(tk.Tk):
         self.schedules_tree.pack(side="left", fill="both", expand=True)
         scrollbar.pack(side="right", fill="y")
         
-        # Botões de controle - UM EM BAIXO DO OUTRO
+        # Botões de controle
         control_frame = ttk.Frame(list_frame)
         control_frame.pack(fill="x", pady=5)
         
@@ -648,21 +648,19 @@ class FirebirdManagerApp(tk.Tk):
                 if icon_path.exists():
                     try:
                         image = Image.open(icon_path)
-                        # Redimensiona para tamanho padrão da bandeja (16x16 ou 32x32)
+                        # Redimensiona para tamanho padrão da bandeja
                         image = image.resize((32, 32), Image.Resampling.LANCZOS)
                         self.log(f"📌 Ícone da bandeja carregado: {icon_path}", "info")
                         break
                     except Exception as e:
                         continue
             
-            # Se não encontrou arquivo, cria ícone padrão
+            # Se não encontrou arquivo cria ícone padrão
             if image is None:
                 from PIL import ImageDraw
-                # Cria uma imagem simples para o ícone
                 image = Image.new('RGB', (32, 32), color='#2c3e50')
                 draw = ImageDraw.Draw(image)
                 
-                # Desenha um "F" branco no centro
                 draw.text((10, 6), "F", fill="white", font=None)
                 self.log("📌 Usando ícone padrão da bandeja", "info")
             
@@ -694,11 +692,11 @@ class FirebirdManagerApp(tk.Tk):
     def minimize_to_tray(self):
         """Minimiza o programa para a bandeja do sistema"""
         if self.conf.get("minimize_to_tray", True):
-            self.withdraw()  # Esconde a janela
+            self.withdraw()
             self.create_tray_icon()
             self.log("📌 Programa minimizado para bandeja do sistema", "info")
         else:
-            self.iconify()  # Minimiza normalmente
+            self.iconify()
 
     def restore_from_tray(self, icon=None, item=None):
         """Restaura o programa da bandeja"""
@@ -706,10 +704,10 @@ class FirebirdManagerApp(tk.Tk):
             self.tray_icon.stop()
             self.tray_icon = None
         
-        self.deiconify()  # Mostra a janela
-        self.state('normal')  # Restaura o estado
-        self.lift()  # Traz para frente
-        self.focus_force()  # Foca na janela
+        self.deiconify()
+        self.state('normal')
+        self.lift()
+        self.focus_force()
         self.log("🔄 Programa restaurado da bandeja", "info")
 
     def quit_application(self, icon=None, item=None):
@@ -1673,7 +1671,7 @@ class FirebirdManagerApp(tk.Tk):
         interval_var = tk.IntVar(value=self.conf.get("monitor_interval", 30))
         ttk.Spinbox(system_frame, from_=10, to=300, textvariable=interval_var, width=10).grid(row=1, column=1, sticky="w", padx=5)
 
-        # Nova seção: Comportamento
+        # Comportamento
         ttk.Label(system_frame, text="Minimizar para bandeja:").grid(row=2, column=0, sticky="w", pady=8)
         tray_var = tk.BooleanVar(value=self.conf.get("minimize_to_tray", True))
         ttk.Checkbutton(system_frame, variable=tray_var).grid(row=2, column=1, sticky="w", padx=5)
