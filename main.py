@@ -19,6 +19,7 @@ import logging
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox, scrolledtext, simpledialog
 import time
+import schedule
 from typing import Dict, List, Optional
 
 # ------- EXECUTA EM MODO ADM -------
@@ -59,34 +60,6 @@ LOG_FILE = BASE_DIR / "firebird_manager.log"
 DEFAULT_BACKUP_DIR = BASE_DIR / "backups"
 DEFAULT_KEEP_BACKUPS = 5
 
-# ---------- SISTEMA DE NOTIFICAÇÕES ----------
-class NotificationManager:
-    
-    def __init__(self):
-        self.enabled = True
-    
-    def show_notification(self, title: str, message: str, duration: int = 5):
-        if not self.enabled:
-            return False
-            
-        try:
-            from win10toast import ToastNotifier
-            toast = ToastNotifier()
-            toast.show_toast(title, message, duration=duration, threaded=True)
-            return True
-        except ImportError:
-            try:
-                if self._is_main_thread():
-                    messagebox.showinfo(title, message)
-                return True
-            except:
-                return False
-        except Exception:
-            return False
-    
-    def _is_main_thread(self):
-        return isinstance(threading.current_thread(), threading._MainThread)
-
 # ---------- LOGGING ----------
 def setup_logging():
     LOG_FILE.parent.mkdir(exist_ok=True)
@@ -122,7 +95,9 @@ def load_config():
         "firebird_host": "localhost",
         "auto_monitor": True,
         "monitor_interval": 30,
-        "notifications": True
+        "minimize_to_tray": True,
+        "start_minimized": False,
+        "scheduled_backups": []
     }
     
     if CONFIG_PATH.exists():
@@ -253,11 +228,13 @@ class FirebirdManagerApp(tk.Tk):
         super().__init__()
         
         self.logger = setup_logging()
-        self.notifications = NotificationManager()
 
         self.dev_buffer = ""
         self.dev_mode = False
         self.scheduled_jobs = []
+        self.schedule_thread = None
+        self.schedule_running = False
+        self.tray_icon = None
 
         self.bind_all("<F12>", self._toggle_dev_mode)
         self.bind_all("<Key>", self._capture_secret_key)
@@ -266,6 +243,11 @@ class FirebirdManagerApp(tk.Tk):
             self.conf = load_config()
             self._setup_ui()
             self._start_background_tasks()
+            self._start_scheduler()
+            
+            # Inicia minimizado se configurado
+            if self.conf.get("start_minimized", False):
+                self.after(1000, self.minimize_to_tray)
             
             self.logger.info("Firebird Manager iniciado com sucesso")
             
@@ -289,6 +271,9 @@ class FirebirdManagerApp(tk.Tk):
         
         self.task_running = False
         
+        # Configura o protocolo de fechamento para minimizar para bandeja
+        self.protocol("WM_DELETE_WINDOW", self.on_close)
+        
         self._create_main_interface()
 
     def _create_main_interface(self):
@@ -303,6 +288,30 @@ class FirebirdManagerApp(tk.Tk):
             font=("Arial", 16, "bold")
         )
         header.pack(expand=True)
+
+        # Controles do sistema (minimizar e configurações) - LADO DIREITO
+        controls_frame = ttk.Frame(header_frame)
+        controls_frame.pack(side="right", padx=5)
+
+        # Botão minimizar para bandeja
+        tray_btn = ttk.Button(
+            controls_frame,
+            text="📌",
+            width=3,
+            command=self.minimize_to_tray,
+            cursor="hand2"
+        )
+        tray_btn.pack(side="left", padx=2)
+
+        # Botão configurações
+        config_btn = ttk.Button(
+            controls_frame,
+            text="⚙️",
+            width=3,
+            command=self.config_window,
+            cursor="hand2"
+        )
+        config_btn.pack(side="left", padx=2)
 
         # Abas
         self.notebook = ttk.Notebook(self)
@@ -322,7 +331,7 @@ class FirebirdManagerApp(tk.Tk):
         dashboard_frame = ttk.Frame(self.notebook)
         self.notebook.add(dashboard_frame, text="Principal")
         
-        # Botões de ação
+        # Botões de ação (AGORA APENAS 4 BOTÕES)
         btn_frame = ttk.LabelFrame(dashboard_frame, text="Ações", padding=10)
         btn_frame.pack(pady=5, padx=10, fill="x")
 
@@ -350,21 +359,14 @@ class FirebirdManagerApp(tk.Tk):
             cursor="hand2", 
             command=self.kill
         )
-        self.btn_config = ttk.Button(
-            btn_frame, 
-            text="⚙️ Configurações",
-            cursor="hand2", 
-            command=self.config_window
-        )
 
-        # Layout dos botões
+        # Layout dos botões (APENAS 4 COLUNAS AGORA)
         self.btn_backup.grid(row=0, column=0, padx=5, pady=5, sticky="ew")
         self.btn_restore.grid(row=0, column=1, padx=5, pady=5, sticky="ew")
         self.btn_verify.grid(row=0, column=2, padx=5, pady=5, sticky="ew")
         self.btn_kill.grid(row=0, column=3, padx=5, pady=5, sticky="ew")
-        self.btn_config.grid(row=0, column=4, padx=5, pady=5, sticky="ew")
         
-        for i in range(5):
+        for i in range(4):  # AGORA SÃO 4 COLUNAS
             btn_frame.columnconfigure(i, weight=1)
 
         # Status
@@ -480,25 +482,32 @@ class FirebirdManagerApp(tk.Tk):
         self.sched_time_var = tk.StringVar(value="02:00")
         ttk.Entry(form_frame, textvariable=self.sched_time_var, width=10).grid(row=3, column=1, padx=5, sticky="w")
         
+        # Compactar backup
+        ttk.Label(form_frame, text="Compactar backup:").grid(row=4, column=0, sticky="w", pady=8)
+        self.sched_compress_var = tk.BooleanVar(value=True)
+        ttk.Checkbutton(form_frame, variable=self.sched_compress_var).grid(row=4, column=1, sticky="w", padx=5)
+        
         # Botão de agendamento
         ttk.Button(form_frame, text="➕ Agendar Backup", 
                   cursor="hand2",
-                  command=self.schedule_backup).grid(row=4, column=1, pady=15, sticky="w")
+                  command=self.schedule_backup).grid(row=5, column=1, pady=15, sticky="w")
         
         # Lista de agendamentos
         list_frame = ttk.LabelFrame(sched_frame, text="Agendamentos Ativos", padding=10)
         list_frame.pack(fill="both", expand=True, padx=10, pady=10)
         
-        self.schedules_tree = ttk.Treeview(list_frame, columns=("Nome", "Banco", "Frequência", "Horário"), show="headings")
+        self.schedules_tree = ttk.Treeview(list_frame, columns=("Nome", "Banco", "Frequência", "Horário", "Compactar"), show="headings")
         self.schedules_tree.heading("Nome", text="Nome")
         self.schedules_tree.heading("Banco", text="Banco de Dados")
         self.schedules_tree.heading("Frequência", text="Frequência")
         self.schedules_tree.heading("Horário", text="Horário")
+        self.schedules_tree.heading("Compactar", text="Compactar")
         
-        self.schedules_tree.column("Nome", width=150)
-        self.schedules_tree.column("Banco", width=200)
-        self.schedules_tree.column("Frequência", width=100)
-        self.schedules_tree.column("Horário", width=80)
+        self.schedules_tree.column("Nome", width=120)
+        self.schedules_tree.column("Banco", width=150)
+        self.schedules_tree.column("Frequência", width=80)
+        self.schedules_tree.column("Horário", width=60)
+        self.schedules_tree.column("Compactar", width=60)
         
         scrollbar = ttk.Scrollbar(list_frame, orient="vertical", command=self.schedules_tree.yview)
         self.schedules_tree.configure(yscrollcommand=scrollbar.set)
@@ -506,13 +515,20 @@ class FirebirdManagerApp(tk.Tk):
         self.schedules_tree.pack(side="left", fill="both", expand=True)
         scrollbar.pack(side="right", fill="y")
         
-        # Botões de controle
+        # Botões de controle - UM EM BAIXO DO OUTRO
         control_frame = ttk.Frame(list_frame)
         control_frame.pack(fill="x", pady=5)
         
         ttk.Button(control_frame, text="🗑️ Remover Selecionado",
                   cursor="hand2", 
-                  command=self.remove_schedule).pack(side="left", padx=5)
+                  command=self.remove_schedule).pack(pady=2)
+        
+        ttk.Button(control_frame, text="🔄 Recarregar Agendamentos",
+                  cursor="hand2",
+                  command=self.load_schedules).pack(pady=2)
+        
+        # Carrega agendamentos salvos
+        self.load_schedules()
 
     def _create_tools_tab(self):
         """Cria aba de ferramentas avançadas"""
@@ -614,10 +630,124 @@ class FirebirdManagerApp(tk.Tk):
         )
         footer_right.pack(side="right", padx=10, pady=3)
 
+    # ---------- SISTEMA DE BANDEJA ----------
+    def create_tray_icon(self):
+        """Cria ícone na bandeja do sistema"""
+        try:
+            import pystray
+            from PIL import Image
+            import threading
+            
+            # Tenta carregar um arquivo de imagem
+            icon_paths = [
+                BASE_DIR / "images" / "icon.ico"
+            ]
+            
+            image = None
+            for icon_path in icon_paths:
+                if icon_path.exists():
+                    try:
+                        image = Image.open(icon_path)
+                        # Redimensiona para tamanho padrão da bandeja (16x16 ou 32x32)
+                        image = image.resize((32, 32), Image.Resampling.LANCZOS)
+                        self.log(f"📌 Ícone da bandeja carregado: {icon_path}", "info")
+                        break
+                    except Exception as e:
+                        continue
+            
+            # Se não encontrou arquivo, cria ícone padrão
+            if image is None:
+                from PIL import ImageDraw
+                # Cria uma imagem simples para o ícone
+                image = Image.new('RGB', (32, 32), color='#2c3e50')
+                draw = ImageDraw.Draw(image)
+                
+                # Desenha um "F" branco no centro
+                draw.text((10, 6), "F", fill="white", font=None)
+                self.log("📌 Usando ícone padrão da bandeja", "info")
+            
+            # Menu do ícone
+            menu = pystray.Menu(
+                pystray.MenuItem("Abrir Firebird Manager", self.restore_from_tray),
+                pystray.MenuItem("Sair", self.quit_application)
+            )
+            
+            # Cria o ícone
+            self.tray_icon = pystray.Icon("firebird_manager", image, "Firebird Manager", menu)
+            
+            # Inicia o ícone em uma thread separada
+            def run_tray():
+                try:
+                    self.tray_icon.run()
+                except Exception as e:
+                    self.log(f"❌ Erro no ícone da bandeja: {e}", "error")
+            
+            tray_thread = threading.Thread(target=run_tray, daemon=True)
+            tray_thread.start()
+            
+            self.log("📌 Ícone da bandeja criado", "info")
+            
+        except ImportError:
+            self.log("⚠️ Biblioteca pystray não encontrada. Instale com: pip install pystray pillow", "warning")
+            self.tray_icon = None
+
+    def minimize_to_tray(self):
+        """Minimiza o programa para a bandeja do sistema"""
+        if self.conf.get("minimize_to_tray", True):
+            self.withdraw()  # Esconde a janela
+            self.create_tray_icon()
+            self.log("📌 Programa minimizado para bandeja do sistema", "info")
+        else:
+            self.iconify()  # Minimiza normalmente
+
+    def restore_from_tray(self, icon=None, item=None):
+        """Restaura o programa da bandeja"""
+        if self.tray_icon:
+            self.tray_icon.stop()
+            self.tray_icon = None
+        
+        self.deiconify()  # Mostra a janela
+        self.state('normal')  # Restaura o estado
+        self.lift()  # Traz para frente
+        self.focus_force()  # Foca na janela
+        self.log("🔄 Programa restaurado da bandeja", "info")
+
+    def quit_application(self, icon=None, item=None):
+        """Fecha o aplicativo completamente"""
+        if self.tray_icon:
+            self.tray_icon.stop()
+        
+        self.schedule_running = False
+        self.quit()
+        self.destroy()
+
+    def on_close(self):
+        """Lida com o fechamento da janela"""
+        if self.conf.get("minimize_to_tray", True):
+            self.minimize_to_tray()
+        else:
+            self.quit_application()
+
     def _start_background_tasks(self):
         """Inicia tarefas em background"""
         if self.conf.get("auto_monitor", True):
             self.after(5000, self.auto_refresh_monitor)
+
+    def _start_scheduler(self):
+        """Inicia o agendador de backups"""
+        self.schedule_running = True
+        self.schedule_thread = threading.Thread(target=self._schedule_worker, daemon=True)
+        self.schedule_thread.start()
+        self.log("🕒 Agendador de backups iniciado", "info")
+
+    def _schedule_worker(self):
+        """Worker thread para executar agendamentos"""
+        while self.schedule_running:
+            try:
+                schedule.run_pending()
+            except Exception as e:
+                self.log(f"❌ Erro no agendador: {e}", "error")
+            time.sleep(60)  # Verifica a cada minuto
 
     # ---------- UTILIDADES ----------
     def log(self, msg, tag="info"):
@@ -652,11 +782,6 @@ class FirebirdManagerApp(tk.Tk):
         buttons = [self.btn_backup, self.btn_restore, self.btn_verify, self.btn_kill, self.btn_config]
         for btn in buttons:
             btn.state(["!disabled"])
-
-    def show_notification(self, title, message, duration=5000):
-        """Exibe notificação do sistema"""
-        if self.conf.get("notifications", True):
-            self.notifications.show_notification(title, message, duration)
 
     def _toggle_dev_mode(self, event=None):
         """Ativa/desativa o modo dev"""
@@ -726,11 +851,9 @@ class FirebirdManagerApp(tk.Tk):
                     self.set_status("✅ Operação concluída com sucesso!", "green")
                     self.log("✔️ Comando executado com sucesso.", "success")
                     self.bell()
-                    self.show_notification("Firebird Manager", "Operação concluída com sucesso!")
                 else:
                     self.set_status("⚠️ Ocorreu um erro. Veja o log abaixo.", "red")
                     self.log(f"⚠️ Comando retornou código de erro: {return_code}", "error")
-                    self.show_notification("Firebird Manager", "Ocorreu um erro na operação!")
 
             except FileNotFoundError:
                 error_msg = "Erro: Arquivo executável não encontrado. Verifique as configurações."
@@ -813,6 +936,71 @@ class FirebirdManagerApp(tk.Tk):
             self.logger.info(f"Backup finalizado com sucesso: {db}")
 
         self.run_command(cmd, on_finish=after_backup)
+
+    def execute_scheduled_backup(self, db_path, schedule_name, compress=True):
+        """Executa um backup agendado"""
+        try:
+            gbak = self.conf.get("gbak_path") or find_executable("gbak.exe")
+            if not gbak or not os.path.exists(db_path):
+                self.log(f"❌ Backup agendado '{schedule_name}' falhou: Banco não encontrado", "error")
+                return
+
+            backup_dir = Path(self.conf.get("backup_dir", DEFAULT_BACKUP_DIR))
+            backup_dir.mkdir(parents=True, exist_ok=True)
+            
+            timestamp = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
+            db_name = Path(db_path).stem
+            name = f"backup_{db_name}_{timestamp}.fbk"
+            backup_path = backup_dir / name
+
+            self.log(f"🕒 Executando backup agendado: {schedule_name}", "info")
+
+            cmd = [
+                gbak, "-b", 
+                "-se", f"{self.conf.get('firebird_host', 'localhost')}:service_mgr",
+                db_path, 
+                str(backup_path), 
+                "-user", self.conf.get("firebird_user", "SYSDBA"), 
+                "-pass", self.conf.get("firebird_password", "masterkey")
+            ]
+
+            def run_scheduled_backup():
+                try:
+                    process = subprocess.Popen(
+                        cmd,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.STDOUT,
+                        text=True,
+                        encoding="utf-8",
+                        errors='replace',
+                        creationflags=subprocess.CREATE_NO_WINDOW
+                    )
+
+                    output, _ = process.communicate()
+                    return_code = process.wait()
+
+                    if return_code == 0:
+                        if compress and backup_path.exists():
+                            zip_path = backup_path.with_suffix(".zip")
+                            with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=6) as z:
+                                z.write(backup_path, arcname=backup_path.name)
+                            backup_path.unlink()
+                        
+                        keep_count = int(self.conf.get("keep_backups", DEFAULT_KEEP_BACKUPS))
+                        cleanup_old_backups(backup_dir, keep_count)
+                        
+                        self.log(f"✅ Backup agendado '{schedule_name}' concluído com sucesso", "success")
+                    else:
+                        self.log(f"❌ Backup agendado '{schedule_name}' falhou: {output}", "error")
+
+                except Exception as e:
+                    self.log(f"❌ Erro no backup agendado '{schedule_name}': {e}", "error")
+
+            # Executa em thread separada para não travar a interface
+            threading.Thread(target=run_scheduled_backup, daemon=True).start()
+
+        except Exception as e:
+            self.log(f"❌ Erro ao executar backup agendado '{schedule_name}': {e}", "error")
 
     def restore(self):
         """Restaura backup para banco de dados"""
@@ -937,7 +1125,6 @@ class FirebirdManagerApp(tk.Tk):
         if success:
             self.set_status("✅ Processos do Firebird finalizados!", "green")
             self.log("✅ Todos os processos do Firebird foram finalizados com sucesso.", "success")
-            self.show_notification("Firebird Manager", "Processos do Firebird finalizados!")
         else:
             self.set_status("ℹ️ Nenhum processo do Firebird encontrado ou erro ao finalizar.", "blue")
             self.log("ℹ️ Nenhum processo do Firebird em execução ou erro ao finalizar.", "info")
@@ -1052,21 +1239,120 @@ class FirebirdManagerApp(tk.Tk):
             messagebox.showerror("Erro", "Preencha todos os campos obrigatórios.")
             return
         
-        # Adiciona à lista
+        try:
+            # Valida horário
+            time_str = self.sched_time_var.get()
+            hours, minutes = map(int, time_str.split(':'))
+            if not (0 <= hours <= 23 and 0 <= minutes <= 59):
+                raise ValueError("Horário inválido")
+        except:
+            messagebox.showerror("Erro", "Horário inválido. Use o formato HH:MM (ex: 14:30)")
+            return
+
+        schedule_data = {
+            "name": self.sched_name_var.get(),
+            "database": self.sched_db_var.get(),
+            "frequency": self.sched_freq_var.get(),
+            "time": self.sched_time_var.get(),
+            "compress": self.sched_compress_var.get()
+        }
+
+        # Adiciona à configuração
+        if "scheduled_backups" not in self.conf:
+            self.conf["scheduled_backups"] = []
+        
+        self.conf["scheduled_backups"].append(schedule_data)
+        save_config(self.conf)
+
+        # Adiciona à lista visual
         self.schedules_tree.insert("", "end", values=(
-            self.sched_name_var.get(),
-            Path(self.sched_db_var.get()).name,
-            self.sched_freq_var.get(),
-            self.sched_time_var.get()
+            schedule_data["name"],
+            Path(schedule_data["database"]).name,
+            schedule_data["frequency"],
+            schedule_data["time"],
+            "Sim" if schedule_data["compress"] else "Não"
         ))
+
+        # Configura o agendamento
+        self._setup_schedule(schedule_data)
         
         # Limpa campos
         self.sched_name_var.set("")
         self.sched_db_var.set("")
         self.sched_time_var.set("02:00")
+        self.sched_compress_var.set(True)
         
-        self.log(f"📅 Agendamento criado: {self.sched_name_var.get()}", "success")
-        self.show_notification("Firebird Manager", "Novo agendamento criado!")
+        self.log(f"📅 Agendamento criado: {schedule_data['name']}", "success")
+        messagebox.showinfo("Sucesso", f"Agendamento '{schedule_data['name']}' criado com sucesso!")
+
+    def _setup_schedule(self, schedule_data):
+        """Configura o agendamento na biblioteca schedule"""
+        try:
+            # Remove agendamentos existentes com o mesmo nome
+            schedule.clear(schedule_data["name"])
+            
+            # Configura o agendamento baseado na frequência
+            job = None
+            if schedule_data["frequency"] == "Diário":
+                job = schedule.every().day.at(schedule_data["time"]).do(
+                    self.execute_scheduled_backup,
+                    schedule_data["database"],
+                    schedule_data["name"],
+                    schedule_data["compress"]
+                ).tag(schedule_data["name"])
+            
+            elif schedule_data["frequency"] == "Semanal":
+                job = schedule.every().monday.at(schedule_data["time"]).do(
+                    self.execute_scheduled_backup,
+                    schedule_data["database"],
+                    schedule_data["name"],
+                    schedule_data["compress"]
+                ).tag(schedule_data["name"])
+            
+            elif schedule_data["frequency"] == "Mensal":
+                # Agenda para o primeiro dia de cada mês
+                job = schedule.every(30).days.at(schedule_data["time"]).do(
+                    self.execute_scheduled_backup,
+                    schedule_data["database"],
+                    schedule_data["name"],
+                    schedule_data["compress"]
+                ).tag(schedule_data["name"])
+            
+            if job:
+                self.log(f"🕒 Agendamento configurado: {schedule_data['name']} - {schedule_data['frequency']} às {schedule_data['time']}", "info")
+                
+        except Exception as e:
+            self.log(f"❌ Erro ao configurar agendamento '{schedule_data['name']}': {e}", "error")
+
+    def load_schedules(self):
+        """Carrega agendamentos salvos"""
+        try:
+            # Limpa a lista visual
+            for item in self.schedules_tree.get_children():
+                self.schedules_tree.delete(item)
+            
+            # Limpa agendamentos existentes
+            schedule.clear()
+            
+            # Carrega da configuração
+            scheduled_backups = self.conf.get("scheduled_backups", [])
+            for schedule_data in scheduled_backups:
+                # Adiciona à lista visual
+                self.schedules_tree.insert("", "end", values=(
+                    schedule_data["name"],
+                    Path(schedule_data["database"]).name,
+                    schedule_data["frequency"],
+                    schedule_data["time"],
+                    "Sim" if schedule_data.get("compress", True) else "Não"
+                ))
+                
+                # Configura o agendamento
+                self._setup_schedule(schedule_data)
+            
+            self.log(f"📅 {len(scheduled_backups)} agendamentos carregados", "info")
+            
+        except Exception as e:
+            self.log(f"❌ Erro ao carregar agendamentos: {e}", "error")
 
     def remove_schedule(self):
         """Remove agendamento selecionado"""
@@ -1077,8 +1363,25 @@ class FirebirdManagerApp(tk.Tk):
         
         for item in selection:
             values = self.schedules_tree.item(item, "values")
+            schedule_name = values[0]
+            
+            # Remove da configuração
+            if "scheduled_backups" in self.conf:
+                self.conf["scheduled_backups"] = [
+                    s for s in self.conf["scheduled_backups"] 
+                    if s["name"] != schedule_name
+                ]
+                save_config(self.conf)
+            
+            # Remove da lista visual
             self.schedules_tree.delete(item)
-            self.log(f"🗑️ Agendamento removido: {values[0]}", "info")
+            
+            # Remove do agendador
+            schedule.clear(schedule_name)
+            
+            self.log(f"🗑️ Agendamento removido: {schedule_name}", "info")
+        
+        messagebox.showinfo("Sucesso", "Agendamento removido com sucesso!")
 
     # ---------- FERRAMENTAS AVANÇADAS ----------
     def optimize_database(self):
@@ -1105,7 +1408,6 @@ class FirebirdManagerApp(tk.Tk):
                 self.run_command(commands[index], lambda: run_next_command(index + 1))
             else:
                 self.log("✅ Otimização concluída com sucesso!", "success")
-                self.show_notification("Firebird Manager", "Otimização do banco concluída!")
         
         run_next_command()
 
@@ -1154,7 +1456,6 @@ class FirebirdManagerApp(tk.Tk):
                 backup_file.unlink()
             except:
                 pass
-            self.show_notification("Firebird Manager", "Migração do banco concluída!")
         
         self.run_command(backup_cmd, after_backup)
 
@@ -1194,6 +1495,12 @@ class FirebirdManagerApp(tk.Tk):
                 latest = max(backup_files, key=lambda f: f.stat().st_mtime)
                 report.append(f"- Último backup: {latest.name}")
                 report.append(f"  Gerado em: {datetime.fromtimestamp(latest.stat().st_mtime).strftime('%d/%m/%Y %H:%M')}")
+            
+            # Agendamentos
+            scheduled_backups = self.conf.get("scheduled_backups", [])
+            report.append(f"\n🕒 AGENDAMENTOS: {len(scheduled_backups)} configurados")
+            for sched in scheduled_backups:
+                report.append(f"- {sched['name']}: {sched['frequency']} às {sched['time']}")
             
             # Salva relatório
             report_path = BASE_DIR / f"relatorio_sistema_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
@@ -1277,10 +1584,13 @@ class FirebirdManagerApp(tk.Tk):
                 self.conf.update(new_conf)
                 save_config(self.conf)
                 
+                # Recarrega agendamentos
+                self.load_schedules()
+                
                 self.log("📥 Configurações importadas com sucesso", "success")
                 messagebox.showinfo("Importar", 
                                   "Configurações importadas com sucesso!\n"
-                                  "Reinicie o aplicativo para aplicar todas as mudanças.")
+                                  "Agendamentos recarregados.")
                                   
             except Exception as e:
                 self.log(f"❌ Erro ao importar configurações: {e}", "error")
@@ -1291,7 +1601,7 @@ class FirebirdManagerApp(tk.Tk):
         """Janela de configurações"""
         win = tk.Toplevel(self)
         win.title("Configurações do Sistema")
-        win.geometry("500x500")
+        win.geometry("500x550")
         win.resizable(False, False)
         win.transient(self)
         win.grab_set()
@@ -1299,7 +1609,7 @@ class FirebirdManagerApp(tk.Tk):
         # Centraliza
         self.update_idletasks()
         x = self.winfo_x() + (self.winfo_width() // 2) - 250
-        y = self.winfo_y() + (self.winfo_height() // 2) - 250
+        y = self.winfo_y() + (self.winfo_height() // 2) - 275
         win.geometry(f"+{x}+{y}")
 
         # Ícone
@@ -1363,9 +1673,14 @@ class FirebirdManagerApp(tk.Tk):
         interval_var = tk.IntVar(value=self.conf.get("monitor_interval", 30))
         ttk.Spinbox(system_frame, from_=10, to=300, textvariable=interval_var, width=10).grid(row=1, column=1, sticky="w", padx=5)
 
-        ttk.Label(system_frame, text="Notificações:").grid(row=2, column=0, sticky="w", pady=8)
-        notif_var = tk.BooleanVar(value=self.conf.get("notifications", True))
-        ttk.Checkbutton(system_frame, variable=notif_var).grid(row=2, column=1, sticky="w", padx=5)
+        # Nova seção: Comportamento
+        ttk.Label(system_frame, text="Minimizar para bandeja:").grid(row=2, column=0, sticky="w", pady=8)
+        tray_var = tk.BooleanVar(value=self.conf.get("minimize_to_tray", True))
+        ttk.Checkbutton(system_frame, variable=tray_var).grid(row=2, column=1, sticky="w", padx=5)
+
+        ttk.Label(system_frame, text="Iniciar minimizado:").grid(row=3, column=0, sticky="w", pady=8)
+        start_min_var = tk.BooleanVar(value=self.conf.get("start_minimized", False))
+        ttk.Checkbutton(system_frame, variable=start_min_var).grid(row=3, column=1, sticky="w", padx=5)
 
         # Botões
         btn_frame = ttk.Frame(win)
@@ -1382,7 +1697,8 @@ class FirebirdManagerApp(tk.Tk):
                 "keep_backups": keep_var.get(),
                 "auto_monitor": monitor_var.get(),
                 "monitor_interval": interval_var.get(),
-                "notifications": notif_var.get()
+                "minimize_to_tray": tray_var.get(),
+                "start_minimized": start_min_var.get()
             })
             
             if save_config(self.conf):
@@ -1479,6 +1795,10 @@ class FirebirdManagerApp(tk.Tk):
             win.destroy()
 
         win.protocol("WM_DELETE_WINDOW", on_close)
+
+    def __del__(self):
+        """Destrutor - para o agendador"""
+        self.schedule_running = False
 
 # ---------- MAIN ----------
 if __name__ == "__main__":
