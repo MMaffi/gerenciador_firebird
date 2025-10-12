@@ -773,13 +773,13 @@ class FirebirdManagerApp(tk.Tk):
 
     def disable_buttons(self):
         """Desabilita todos os botões durante operações"""
-        buttons = [self.btn_backup, self.btn_restore, self.btn_verify, self.btn_kill, self.btn_config]
+        buttons = [self.btn_backup, self.btn_restore, self.btn_verify, self.btn_kill]
         for btn in buttons:
             btn.state(["disabled"])
 
     def enable_buttons(self):
         """Reabilita todos os botões"""
-        buttons = [self.btn_backup, self.btn_restore, self.btn_verify, self.btn_kill, self.btn_config]
+        buttons = [self.btn_backup, self.btn_restore, self.btn_verify, self.btn_kill]
         for btn in buttons:
             btn.state(["!disabled"])
 
