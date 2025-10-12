@@ -281,22 +281,24 @@ class FirebirdManagerApp(tk.Tk):
         # Header
         header_frame = ttk.Frame(self)
         header_frame.pack(pady=10, fill="x", padx=10)
-        
+
+        header_frame.columnconfigure(0, weight=1)
+        header_frame.columnconfigure(1, weight=0)
+
         header = ttk.Label(
             header_frame, 
-            text="Firebird Manager",
+            text="Gerenciador Firebird",
             font=("Arial", 16, "bold")
         )
-        header.pack(expand=True)
+        header.grid(row=0, column=0, sticky="w")
 
-        # Controles do sistema
         controls_frame = ttk.Frame(header_frame)
-        controls_frame.pack(side="right", padx=5)
+        controls_frame.grid(row=0, column=1, sticky="e")
 
         # Botão minimizar para bandeja
         tray_btn = ttk.Button(
             controls_frame,
-            text="📌",
+            text=" ⤵️",
             width=3,
             command=self.minimize_to_tray,
             cursor="hand2"
@@ -306,8 +308,7 @@ class FirebirdManagerApp(tk.Tk):
         # Botão configurações
         config_btn = ttk.Button(
             controls_frame,
-            text="⚙️",
-            width=3,
+            text="⚙️ Configurações",
             command=self.config_window,
             cursor="hand2"
         )
