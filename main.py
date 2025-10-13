@@ -582,15 +582,15 @@ class FirebirdManagerApp(tk.Tk):
         )
         report_btn.grid(row=1, column=0, padx=10, pady=10, sticky="ew")
         
-        # Exportar configurações
-        export_btn = ttk.Button(
+        # Verificar espaço
+        space_btn = ttk.Button(
             tools_grid, 
-            text="📤 Exportar Config",
+            text="💾 Verificar Espaço",
             cursor="hand2", 
-            command=self.export_config,
+            command=self.check_disk_space,
             width=20
         )
-        export_btn.grid(row=1, column=1, padx=10, pady=10, sticky="ew")
+        space_btn.grid(row=1, column=1, padx=10, pady=10, sticky="ew")
         
         # Importar configurações
         import_btn = ttk.Button(
@@ -601,16 +601,16 @@ class FirebirdManagerApp(tk.Tk):
             width=20
         )
         import_btn.grid(row=2, column=0, padx=10, pady=10, sticky="ew")
-        
-        # Verificar espaço
-        space_btn = ttk.Button(
+
+        # Exportar configurações
+        export_btn = ttk.Button(
             tools_grid, 
-            text="💾 Verificar Espaço",
+            text="📤 Exportar Config",
             cursor="hand2", 
-            command=self.check_disk_space,
+            command=self.export_config,
             width=20
         )
-        space_btn.grid(row=2, column=1, padx=10, pady=10, sticky="ew")
+        export_btn.grid(row=2, column=1, padx=10, pady=10, sticky="ew")
         
         # Configurar colunas
         tools_grid.columnconfigure(0, weight=1)
