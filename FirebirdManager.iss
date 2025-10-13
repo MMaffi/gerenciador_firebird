@@ -1,5 +1,5 @@
 ; ==============================================
-; Instalador Firebird Manager - Versão Final
+; Instalador Firebird Manager
 ; Autor: MMaffi
 ; ==============================================
 

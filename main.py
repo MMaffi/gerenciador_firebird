@@ -21,6 +21,9 @@ from tkinter import ttk, filedialog, messagebox, scrolledtext, simpledialog
 import time
 import schedule
 from typing import Dict, List, Optional
+import winreg
+import winshell
+from win32com.client import Dispatch
 
 # ------- EXECUTA EM MODO ADM -------
 def is_admin():
@@ -97,6 +100,7 @@ def load_config():
         "monitor_interval": 30,
         "minimize_to_tray": True,
         "start_minimized": False,
+        "start_with_windows": False,
         "scheduled_backups": []
     }
     
@@ -245,6 +249,14 @@ class FirebirdManagerApp(tk.Tk):
             self._start_background_tasks()
             self._start_scheduler()
             
+            # Verifica e sincroniza a configuração de inicialização com Windows
+            current_startup_setting = self.conf.get("start_with_windows", False)
+            actual_startup_status = self.is_in_startup()
+            
+            if current_startup_setting != actual_startup_status:
+                self.log("🔄 Sincronizando configuração de inicialização com Windows...", "info")
+                self.apply_startup_setting(current_startup_setting)
+            
             # Inicia minimizado se configurado
             if self.conf.get("start_minimized", False):
                 self.after(1000, self.minimize_to_tray)
@@ -281,22 +293,24 @@ class FirebirdManagerApp(tk.Tk):
         # Header
         header_frame = ttk.Frame(self)
         header_frame.pack(pady=10, fill="x", padx=10)
-        
+
+        header_frame.columnconfigure(0, weight=1)
+        header_frame.columnconfigure(1, weight=0)
+
         header = ttk.Label(
             header_frame, 
-            text="Firebird Manager",
+            text="Gerenciador Firebird",
             font=("Arial", 16, "bold")
         )
-        header.pack(expand=True)
+        header.grid(row=0, column=0, sticky="w")
 
-        # Controles do sistema
         controls_frame = ttk.Frame(header_frame)
-        controls_frame.pack(side="right", padx=5)
+        controls_frame.grid(row=0, column=1, sticky="e")
 
         # Botão minimizar para bandeja
         tray_btn = ttk.Button(
             controls_frame,
-            text="📌",
+            text=" ⤵️",
             width=3,
             command=self.minimize_to_tray,
             cursor="hand2"
@@ -306,8 +320,7 @@ class FirebirdManagerApp(tk.Tk):
         # Botão configurações
         config_btn = ttk.Button(
             controls_frame,
-            text="⚙️",
-            width=3,
+            text="⚙️ Configurações",
             command=self.config_window,
             cursor="hand2"
         )
@@ -569,15 +582,15 @@ class FirebirdManagerApp(tk.Tk):
         )
         report_btn.grid(row=1, column=0, padx=10, pady=10, sticky="ew")
         
-        # Exportar configurações
-        export_btn = ttk.Button(
+        # Verificar espaço
+        space_btn = ttk.Button(
             tools_grid, 
-            text="📤 Exportar Config",
+            text="💾 Verificar Espaço",
             cursor="hand2", 
-            command=self.export_config,
+            command=self.check_disk_space,
             width=20
         )
-        export_btn.grid(row=1, column=1, padx=10, pady=10, sticky="ew")
+        space_btn.grid(row=1, column=1, padx=10, pady=10, sticky="ew")
         
         # Importar configurações
         import_btn = ttk.Button(
@@ -588,16 +601,16 @@ class FirebirdManagerApp(tk.Tk):
             width=20
         )
         import_btn.grid(row=2, column=0, padx=10, pady=10, sticky="ew")
-        
-        # Verificar espaço
-        space_btn = ttk.Button(
+
+        # Exportar configurações
+        export_btn = ttk.Button(
             tools_grid, 
-            text="💾 Verificar Espaço",
+            text="📤 Exportar Config",
             cursor="hand2", 
-            command=self.check_disk_space,
+            command=self.export_config,
             width=20
         )
-        space_btn.grid(row=2, column=1, padx=10, pady=10, sticky="ew")
+        export_btn.grid(row=2, column=1, padx=10, pady=10, sticky="ew")
         
         # Configurar colunas
         tools_grid.columnconfigure(0, weight=1)
@@ -746,6 +759,131 @@ class FirebirdManagerApp(tk.Tk):
             except Exception as e:
                 self.log(f"❌ Erro no agendador: {e}", "error")
             time.sleep(60)  # Verifica a cada minuto
+
+    # ---------- INICIALIZAÇÃO COM WINDOWS ----------
+    def toggle_startup(self, enabled):
+        self.apply_startup_setting(enabled)
+
+    def apply_startup_setting(self, enabled):
+        """Aplica a configuração de inicialização com Windows"""
+        try:
+            if enabled:
+                self.add_to_startup()
+            else:
+                self.remove_from_startup()
+        except Exception as e:
+            self.log(f"❌ Erro ao configurar inicialização com Windows: {e}", "error")
+
+    def add_to_startup(self):
+        """Adiciona o programa à inicialização do Windows"""
+        try:
+            # Usando winshell
+            startup_folder = winshell.startup()
+            script_path = sys.executable if getattr(sys, 'frozen', False) else sys.argv[0]
+            
+            # Cria o atalho
+            shortcut_path = os.path.join(startup_folder, "Firebird Manager.lnk")
+            
+            shell = Dispatch('WScript.Shell')
+            shortcut = shell.CreateShortCut(shortcut_path)
+            shortcut.Targetpath = script_path
+            shortcut.WorkingDirectory = os.path.dirname(script_path)
+            shortcut.Description = "Firebird Manager"
+            
+            # Adiciona argumento para iniciar minimizado se configurado
+            if self.conf.get("start_minimized", False):
+                shortcut.Arguments = "--minimized"
+            
+            shortcut.save()
+            
+            self.log("✅ Programa adicionado à inicialização do Windows", "success")
+            return True
+            
+        except Exception as e:
+            self.log(f"❌ Erro ao adicionar à inicialização: {e}", "error")
+
+            return self._add_to_startup_registry()
+
+    def _add_to_startup_registry(self):
+        """Método alternativo usando registro do Windows"""
+        try:
+            script_path = sys.executable if getattr(sys, 'frozen', False) else sys.argv[0]
+            
+            # Adiciona argumento para iniciar minimizado se configurado
+            if self.conf.get("start_minimized", False):
+                script_path = f'"{script_path}" --minimized'
+            else:
+                script_path = f'"{script_path}"'
+            
+            key = winreg.HKEY_CURRENT_USER
+            subkey = r"Software\Microsoft\Windows\CurrentVersion\Run"
+            
+            with winreg.OpenKey(key, subkey, 0, winreg.KEY_SET_VALUE) as reg_key:
+                winreg.SetValueEx(reg_key, "Firebird Manager", 0, winreg.REG_SZ, script_path)
+            
+            self.log("✅ Programa adicionado à inicialização via registro", "success")
+            return True
+            
+        except Exception as e:
+            self.log(f"❌ Erro ao adicionar ao registro: {e}", "error")
+            return False
+
+    def remove_from_startup(self):
+        """Remove o programa da inicialização do Windows"""
+        try:
+            # Remove atalho da pasta Inicializar
+            startup_folder = winshell.startup()
+            shortcut_path = os.path.join(startup_folder, "Firebird Manager.lnk")
+            
+            if os.path.exists(shortcut_path):
+                os.remove(shortcut_path)
+                self.log("✅ Programa removido da inicialização (atalho)", "success")
+            
+            # Remove do registro
+            self._remove_from_startup_registry()
+            
+            return True
+            
+        except Exception as e:
+            self.log(f"❌ Erro ao remover da inicialização: {e}", "error")
+            return False
+
+    def _remove_from_startup_registry(self):
+        """Remove do registro do Windows"""
+        try:
+            key = winreg.HKEY_CURRENT_USER
+            subkey = r"Software\Microsoft\Windows\CurrentVersion\Run"
+            
+            with winreg.OpenKey(key, subkey, 0, winreg.KEY_SET_VALUE) as reg_key:
+                try:
+                    winreg.DeleteValue(reg_key, "Firebird Manager")
+                    self.log("✅ Programa removido da inicialização (registro)", "success")
+                except FileNotFoundError:
+                    pass
+                    
+        except Exception as e:
+            self.log(f"❌ Erro ao remover do registro: {e}", "error")
+
+    def is_in_startup(self):
+        try:
+            # Verifica no registro
+            key = winreg.HKEY_CURRENT_USER
+            subkey = r"Software\Microsoft\Windows\CurrentVersion\Run"
+            
+            with winreg.OpenKey(key, subkey, 0, winreg.KEY_READ) as reg_key:
+                try:
+                    winreg.QueryValueEx(reg_key, "Firebird Manager")
+                    return True
+                except FileNotFoundError:
+                    pass
+            
+            # Verifica na pasta Inicializar
+            startup_folder = winshell.startup()
+            shortcut_path = os.path.join(startup_folder, "Firebird Manager.lnk")
+            return os.path.exists(shortcut_path)
+            
+        except Exception:
+            return False
 
     # ---------- UTILIDADES ----------
     def log(self, msg, tag="info"):
@@ -1500,6 +1638,10 @@ class FirebirdManagerApp(tk.Tk):
             for sched in scheduled_backups:
                 report.append(f"- {sched['name']}: {sched['frequency']} às {sched['time']}")
             
+            # Inicialização com Windows
+            startup_status = "Sim" if self.conf.get("start_with_windows", False) else "Não"
+            report.append(f"\n🪟 INICIALIZAÇÃO COM WINDOWS: {startup_status}")
+            
             # Salva relatório
             report_path = BASE_DIR / f"relatorio_sistema_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
             with open(report_path, 'w', encoding='utf-8') as f:
@@ -1599,7 +1741,7 @@ class FirebirdManagerApp(tk.Tk):
         """Janela de configurações"""
         win = tk.Toplevel(self)
         win.title("Configurações do Sistema")
-        win.geometry("500x550")
+        win.geometry("500x600")
         win.resizable(False, False)
         win.transient(self)
         win.grab_set()
@@ -1607,7 +1749,7 @@ class FirebirdManagerApp(tk.Tk):
         # Centraliza
         self.update_idletasks()
         x = self.winfo_x() + (self.winfo_width() // 2) - 250
-        y = self.winfo_y() + (self.winfo_height() // 2) - 275
+        y = self.winfo_y() + (self.winfo_height() // 2) - 300
         win.geometry(f"+{x}+{y}")
 
         # Ícone
@@ -1680,6 +1822,13 @@ class FirebirdManagerApp(tk.Tk):
         start_min_var = tk.BooleanVar(value=self.conf.get("start_minimized", False))
         ttk.Checkbutton(system_frame, variable=start_min_var).grid(row=3, column=1, sticky="w", padx=5)
 
+        # Iniciar com Windows
+        ttk.Label(system_frame, text="Iniciar com Windows:").grid(row=4, column=0, sticky="w", pady=8)
+        startup_var = tk.BooleanVar(value=self.conf.get("start_with_windows", False))
+        startup_cb = ttk.Checkbutton(system_frame, variable=startup_var, 
+                                    command=lambda: self.toggle_startup(startup_var.get()))
+        startup_cb.grid(row=4, column=1, sticky="w", padx=5)
+
         # Botões
         btn_frame = ttk.Frame(win)
         btn_frame.pack(pady=10)
@@ -1696,10 +1845,13 @@ class FirebirdManagerApp(tk.Tk):
                 "auto_monitor": monitor_var.get(),
                 "monitor_interval": interval_var.get(),
                 "minimize_to_tray": tray_var.get(),
-                "start_minimized": start_min_var.get()
+                "start_minimized": start_min_var.get(),
+                "start_with_windows": startup_var.get()
             })
             
             if save_config(self.conf):
+                # Aplica a configuração de inicialização com Windows
+                self.apply_startup_setting(startup_var.get())
                 messagebox.showinfo("Configurações", "Configurações salvas com sucesso!")
                 win.destroy()
             else:
