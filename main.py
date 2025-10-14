@@ -1182,30 +1182,35 @@ class FirebirdManagerApp(tk.Tk):
 
         tmpdir = None
         actual_backup = bkp
+        extracted_files = []
         
         # Extrai se for arquivo ZIP
         if bkp.lower().endswith(".zip"):
             try:
-                tmpdir = Path(tempfile.mkdtemp(prefix="fb_restore_"))
-                self.log(f"Extraindo arquivo ZIP para: {tmpdir}", "info")
+                # Extrai caso for ZIP
+                zip_path = Path(bkp)
+                extract_dir = zip_path.parent / f"{zip_path.stem}_extracted"
+                extract_dir.mkdir(exist_ok=True)
+                
+                self.log(f"Extraindo arquivo ZIP para: {extract_dir}", "info")
                 
                 with zipfile.ZipFile(bkp, "r") as z:
-                    z.extractall(tmpdir)
+                    z.extractall(extract_dir)
                 
-                fbks = list(tmpdir.glob("*.fbk"))
+                fbks = list(extract_dir.glob("*.fbk"))
                 if not fbks:
                     messagebox.showerror("Erro", "Nenhum arquivo .fbk encontrado dentro do ZIP.")
-                    if tmpdir:
-                        shutil.rmtree(tmpdir, ignore_errors=True)
+                    shutil.rmtree(extract_dir, ignore_errors=True)
                     return
                 
                 actual_backup = str(fbks[0])
+                extracted_files.append(extract_dir)
                 self.log(f"Arquivo extraído: {actual_backup}", "success")
                 
             except Exception as e:
                 messagebox.showerror("Erro", f"Falha ao extrair arquivo ZIP: {e}")
-                if tmpdir:
-                    shutil.rmtree(tmpdir, ignore_errors=True)
+                if extract_dir.exists():
+                    shutil.rmtree(extract_dir, ignore_errors=True)
                 return
 
         dest = filedialog.asksaveasfilename(
@@ -1214,8 +1219,13 @@ class FirebirdManagerApp(tk.Tk):
             filetypes=[("Firebird Database", "*.fdb")]
         )
         if not dest:
-            if tmpdir:
-                shutil.rmtree(tmpdir, ignore_errors=True)
+            # Limpa arquivos extraídos se o usuário cancelar
+            for item in extracted_files:
+                if Path(item).exists():
+                    if Path(item).is_dir():
+                        shutil.rmtree(item, ignore_errors=True)
+                    else:
+                        Path(item).unlink(missing_ok=True)
             return
 
         # Constrói comando gbak restauração
@@ -1233,15 +1243,21 @@ class FirebirdManagerApp(tk.Tk):
         self.log(f"🔌 Conectando em: {self._get_service_mgr_string()}", "info")
         self.set_status("Restaurando banco, aguarde...", "blue")
 
-        def cleanup_tmp():
-            if tmpdir:
-                try:
-                    shutil.rmtree(tmpdir, ignore_errors=True)
-                    self.log("🗑️ Arquivos temporários removidos.", "info")
-                except Exception as e:
-                    self.log(f"⚠️ Erro ao remover temporários: {e}", "warning")
+        def cleanup_extracted():
+            """Limpa arquivos extraídos após a restauração"""
+            for item in extracted_files:
+                if Path(item).exists():
+                    try:
+                        if Path(item).is_dir():
+                            shutil.rmtree(item, ignore_errors=True)
+                            self.log(f"🗑️ Pasta de extração removida: {item}", "info")
+                        else:
+                            Path(item).unlink(missing_ok=True)
+                            self.log(f"🗑️ Arquivo temporário removido: {item}", "info")
+                    except Exception as e:
+                        self.log(f"⚠️ Erro ao remover arquivos extraídos {item}: {e}", "warning")
 
-        self.run_command(cmd, on_finish=cleanup_tmp)
+        self.run_command(cmd, on_finish=cleanup_extracted)
 
     def verify(self):
         """Verifica integridade do banco e oferece correção se necessário"""
