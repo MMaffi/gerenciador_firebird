@@ -96,6 +96,7 @@ def load_config():
         "firebird_user": "SYSDBA",
         "firebird_password": "masterkey",
         "firebird_host": "localhost",
+        "firebird_port": "26350",  # Porta padrão
         "auto_monitor": True,
         "monitor_interval": 30,
         "minimize_to_tray": True,
@@ -600,7 +601,7 @@ class FirebirdManagerApp(tk.Tk):
             command=self.check_disk_space,
             width=20
         )
-        space_btn.grid(row=3, column=0, padx=10, pady=10, sticky="ew")
+        space_btn.grid(row=2, column=0, padx=10, pady=10, sticky="ew")
         
         # Importar configurações
         import_btn = ttk.Button(
@@ -620,7 +621,7 @@ class FirebirdManagerApp(tk.Tk):
             command=self.export_config,
             width=20
         )
-        export_btn.grid(row=2, column=0, padx=10, pady=10, sticky="ew")
+        export_btn.grid(row=3, column=0, padx=10, pady=10, sticky="ew")
         
         # Configurar colunas
         tools_grid.columnconfigure(0, weight=1)
@@ -1018,6 +1019,18 @@ class FirebirdManagerApp(tk.Tk):
 
         threading.Thread(target=worker, daemon=True).start()
 
+    def _get_connection_string(self):
+        """Retorna a string de conexão com host e porta"""
+        host = self.conf.get("firebird_host", "localhost")
+        port = self.conf.get("firebird_port", "26350")
+        return f"{host}/{port}"
+
+    def _get_service_mgr_string(self):
+        """Retorna a string de conexão para service_mgr com porta"""
+        host = self.conf.get("firebird_host", "localhost")
+        port = self.conf.get("firebird_port", "26350")
+        return f"{host}/{port}:service_mgr"
+
     # ---------- FUNÇÕES PRINCIPAIS ----------
     def backup(self):
         """Gera backup do banco de dados"""
@@ -1054,7 +1067,7 @@ class FirebirdManagerApp(tk.Tk):
         # Constrói comando gbak geração
         cmd = [
             gbak, "-b", 
-            "-se", f"{self.conf.get('firebird_host', 'localhost')}:service_mgr",
+            "-se", self._get_service_mgr_string(),
             db, 
             str(backup_path), 
             "-user", self.conf.get("firebird_user", "SYSDBA"), 
@@ -1062,6 +1075,7 @@ class FirebirdManagerApp(tk.Tk):
         ]
 
         self.log(f"🟦 Iniciando backup: {db} -> {backup_path}", "info")
+        self.log(f"🔌 Conectando em: {self._get_service_mgr_string()}", "info")
         self.set_status("Gerando backup, por favor aguarde...", "blue")
 
         def after_backup():
@@ -1100,10 +1114,11 @@ class FirebirdManagerApp(tk.Tk):
             backup_path = backup_dir / name
 
             self.log(f"🕒 Executando backup agendado: {schedule_name}", "info")
+            self.log(f"🔌 Conectando em: {self._get_service_mgr_string()}", "info")
 
             cmd = [
                 gbak, "-b", 
-                "-se", f"{self.conf.get('firebird_host', 'localhost')}:service_mgr",
+                "-se", self._get_service_mgr_string(),
                 db_path, 
                 str(backup_path), 
                 "-user", self.conf.get("firebird_user", "SYSDBA"), 
@@ -1206,7 +1221,7 @@ class FirebirdManagerApp(tk.Tk):
         # Constrói comando gbak restauração
         cmd = [
             gbak, "-c", 
-            "-se", f"{self.conf.get('firebird_host', 'localhost')}:service_mgr",
+            "-se", self._get_service_mgr_string(),
             actual_backup, 
             dest, 
             "-user", self.conf.get("firebird_user", "SYSDBA"), 
@@ -1215,6 +1230,7 @@ class FirebirdManagerApp(tk.Tk):
         ]
 
         self.log(f"🟦 Restaurando backup: {actual_backup} -> {dest}", "info")
+        self.log(f"🔌 Conectando em: {self._get_service_mgr_string()}", "info")
         self.set_status("Restaurando banco, aguarde...", "blue")
 
         def cleanup_tmp():
@@ -1455,10 +1471,11 @@ class FirebirdManagerApp(tk.Tk):
         backup_path = safety_dir / backup_name
         
         self.log(f"🛡️ Criando backup de segurança: {backup_path}", "info")
+        self.log(f"🔌 Conectando em: {self._get_service_mgr_string()}", "info")
         
         cmd = [
             gbak, "-b", 
-            "-se", f"{self.conf.get('firebird_host', 'localhost')}:service_mgr",
+            "-se", self._get_service_mgr_string(),
             db_path, 
             str(backup_path), 
             "-user", self.conf.get("firebird_user", "SYSDBA"), 
@@ -1670,6 +1687,8 @@ class FirebirdManagerApp(tk.Tk):
             
             if firebird_processes:
                 status = f"✅ Online - Processos: {', '.join(set(firebird_processes))}"
+                port = self.conf.get("firebird_port", "26350")
+                status += f" (Porta: {port})"
             else:
                 status = "❌ Offline - Nenhum processo encontrado"
                 
@@ -1945,16 +1964,21 @@ class FirebirdManagerApp(tk.Tk):
         migrated_file = backup_dir / f"migrated_v{target_version}_{Path(source_db).name}"
         
         self.log(f"🔄 Iniciando migração para v{target_version}...", "info")
+        self.log(f"🔌 Conectando em: {self._get_service_mgr_string()}", "info")
         
         # Backup
         backup_cmd = [
-            gbak, "-b", source_db, str(backup_file),
+            gbak, "-b", 
+            "-se", self._get_service_mgr_string(),
+            source_db, str(backup_file),
             "-user", self.conf["firebird_user"], "-pass", self.conf["firebird_password"]
         ]
         
         # Restauração
         restore_cmd = [
-            gbak, "-c", str(backup_file), str(migrated_file),
+            gbak, "-c", 
+            "-se", self._get_service_mgr_string(),
+            str(backup_file), str(migrated_file),
             "-user", self.conf["firebird_user"], "-pass", self.conf["firebird_password"], "-rep"
         ]
         
@@ -1986,13 +2010,20 @@ class FirebirdManagerApp(tk.Tk):
             report.append(f"- Diretório base: {BASE_DIR}")
             report.append(f"- Diretório de backups: {self.conf.get('backup_dir', 'Não definido')}")
             
+            # Configurações Firebird
+            report.append(f"\n🔥 CONFIGURAÇÕES FIREBIRD:")
+            report.append(f"- Host: {self.conf.get('firebird_host', 'localhost')}")
+            report.append(f"- Porta: {self.conf.get('firebird_port', '26350')}")
+            report.append(f"- Usuário: {self.conf.get('firebird_user', 'SYSDBA')}")
+            
             # Espaço em disco
             backup_dir = Path(self.conf.get("backup_dir", DEFAULT_BACKUP_DIR))
             disk_info = get_disk_space(backup_dir)
             if disk_info:
-                report.append(f"- Espaço total: {disk_info['total_gb']:.1f} GB")
-                report.append(f"- Espaço livre: {disk_info['free_gb']:.1f} GB")
-                report.append(f"- Espaço usado: {disk_info['percent_used']:.1f}%")
+                report.append(f"\n💾 ESPAÇO EM DISCO:")
+                report.append(f"- Total: {disk_info['total_gb']:.1f} GB")
+                report.append(f"- Livre: {disk_info['free_gb']:.1f} GB")
+                report.append(f"- Usado: {disk_info['percent_used']:.1f}%")
             
             # Processos Firebird
             fb_processes = self._get_firebird_processes()
@@ -2093,7 +2124,7 @@ class FirebirdManagerApp(tk.Tk):
                 with open(config_file, 'r', encoding='utf-8') as f:
                     new_conf = json.load(f)
                 
-                keep_keys = ['backup_dir', 'gbak_path', 'gfix_path']
+                keep_keys = ['backup_dir', 'gbak_path', 'gfix_path', 'firebird_host', 'firebird_port']
                 for key in keep_keys:
                     if key in self.conf:
                         new_conf[key] = self.conf[key]
@@ -2118,7 +2149,7 @@ class FirebirdManagerApp(tk.Tk):
         """Janela de configurações"""
         win = tk.Toplevel(self)
         win.title("Configurações do Sistema")
-        win.geometry("500x600")
+        win.geometry("500x650")
         win.resizable(False, False)
         win.transient(self)
         win.grab_set()
@@ -2126,7 +2157,7 @@ class FirebirdManagerApp(tk.Tk):
         # Centraliza
         self.update_idletasks()
         x = self.winfo_x() + (self.winfo_width() // 2) - 250
-        y = self.winfo_y() + (self.winfo_height() // 2) - 300
+        y = self.winfo_y() + (self.winfo_height() // 2) - 325
         win.geometry(f"+{x}+{y}")
 
         # Ícone
@@ -2166,17 +2197,21 @@ class FirebirdManagerApp(tk.Tk):
         host_var = tk.StringVar(value=self.conf.get("firebird_host", "localhost"))
         ttk.Entry(firebird_frame, textvariable=host_var, width=40).grid(row=3, column=1, padx=5)
 
-        ttk.Label(firebird_frame, text="Usuário:").grid(row=4, column=0, sticky="w", pady=8)
+        ttk.Label(firebird_frame, text="Porta do Firebird:").grid(row=4, column=0, sticky="w", pady=8)
+        port_var = tk.StringVar(value=self.conf.get("firebird_port", "26350"))
+        ttk.Entry(firebird_frame, textvariable=port_var, width=40).grid(row=4, column=1, padx=5)
+
+        ttk.Label(firebird_frame, text="Usuário:").grid(row=5, column=0, sticky="w", pady=8)
         user_var = tk.StringVar(value=self.conf.get("firebird_user", "SYSDBA"))
-        ttk.Entry(firebird_frame, textvariable=user_var, width=40).grid(row=4, column=1, padx=5)
+        ttk.Entry(firebird_frame, textvariable=user_var, width=40).grid(row=5, column=1, padx=5)
 
-        ttk.Label(firebird_frame, text="Senha:").grid(row=5, column=0, sticky="w", pady=8)
+        ttk.Label(firebird_frame, text="Senha:").grid(row=6, column=0, sticky="w", pady=8)
         pass_var = tk.StringVar(value=self.conf.get("firebird_password", "masterkey"))
-        ttk.Entry(firebird_frame, textvariable=pass_var, width=40, show="*").grid(row=5, column=1, padx=5)
+        ttk.Entry(firebird_frame, textvariable=pass_var, width=40, show="*").grid(row=6, column=1, padx=5)
 
-        ttk.Label(firebird_frame, text="Qtd. backups a manter:").grid(row=6, column=0, sticky="w", pady=8)
+        ttk.Label(firebird_frame, text="Qtd. backups a manter:").grid(row=7, column=0, sticky="w", pady=8)
         keep_var = tk.IntVar(value=self.conf.get("keep_backups", DEFAULT_KEEP_BACKUPS))
-        ttk.Spinbox(firebird_frame, from_=1, to=100, textvariable=keep_var, width=10).grid(row=6, column=1, sticky="w", padx=5)
+        ttk.Spinbox(firebird_frame, from_=1, to=100, textvariable=keep_var, width=10).grid(row=7, column=1, sticky="w", padx=5)
 
         # Aba Sistema
         system_frame = ttk.Frame(notebook, padding=10)
@@ -2216,6 +2251,7 @@ class FirebirdManagerApp(tk.Tk):
                 "gfix_path": gfix_var.get(),
                 "backup_dir": backup_var.get(),
                 "firebird_host": host_var.get(),
+                "firebird_port": port_var.get(),
                 "firebird_user": user_var.get(),
                 "firebird_password": pass_var.get(),
                 "keep_backups": keep_var.get(),
