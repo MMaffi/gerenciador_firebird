@@ -562,6 +562,16 @@ class FirebirdManagerApp(tk.Tk):
         )
         optimize_btn.grid(row=0, column=0, padx=10, pady=10, sticky="ew")
         
+        # Correção de Banco
+        repair_btn = ttk.Button(
+            tools_grid, 
+            text="🔩 Corrigir Banco",
+            cursor="hand2", 
+            command=self.repair_database,
+            width=20
+        )
+        repair_btn.grid(row=0, column=1, padx=10, pady=10, sticky="ew")
+        
         # Migração
         migrate_btn = ttk.Button(
             tools_grid, 
@@ -570,7 +580,7 @@ class FirebirdManagerApp(tk.Tk):
             command=self.migrate_database,
             width=20
         )
-        migrate_btn.grid(row=0, column=1, padx=10, pady=10, sticky="ew")
+        migrate_btn.grid(row=1, column=0, padx=10, pady=10, sticky="ew")
         
         # Relatório
         report_btn = ttk.Button(
@@ -580,7 +590,7 @@ class FirebirdManagerApp(tk.Tk):
             command=self.generate_system_report,
             width=20
         )
-        report_btn.grid(row=1, column=0, padx=10, pady=10, sticky="ew")
+        report_btn.grid(row=1, column=1, padx=10, pady=10, sticky="ew")
         
         # Verificar espaço
         space_btn = ttk.Button(
@@ -590,7 +600,7 @@ class FirebirdManagerApp(tk.Tk):
             command=self.check_disk_space,
             width=20
         )
-        space_btn.grid(row=1, column=1, padx=10, pady=10, sticky="ew")
+        space_btn.grid(row=3, column=0, padx=10, pady=10, sticky="ew")
         
         # Importar configurações
         import_btn = ttk.Button(
@@ -600,7 +610,7 @@ class FirebirdManagerApp(tk.Tk):
             command=self.import_config,
             width=20
         )
-        import_btn.grid(row=2, column=0, padx=10, pady=10, sticky="ew")
+        import_btn.grid(row=2, column=1, padx=10, pady=10, sticky="ew")
 
         # Exportar configurações
         export_btn = ttk.Button(
@@ -610,7 +620,7 @@ class FirebirdManagerApp(tk.Tk):
             command=self.export_config,
             width=20
         )
-        export_btn.grid(row=2, column=1, padx=10, pady=10, sticky="ew")
+        export_btn.grid(row=2, column=0, padx=10, pady=10, sticky="ew")
         
         # Configurar colunas
         tools_grid.columnconfigure(0, weight=1)
@@ -1218,7 +1228,7 @@ class FirebirdManagerApp(tk.Tk):
         self.run_command(cmd, on_finish=cleanup_tmp)
 
     def verify(self):
-        """Verifica integridade do banco de dados"""
+        """Verifica integridade do banco e oferece correção se necessário"""
         gfix = self.conf.get("gfix_path") or find_executable("gfix.exe")
         if not gfix:
             messagebox.showerror("Erro", "gfix.exe não encontrado. Configure o caminho nas configurações.")
@@ -1243,7 +1253,374 @@ class FirebirdManagerApp(tk.Tk):
 
         self.log(f"🩺 Verificando integridade: {db}", "info")
         self.set_status("Executando verificação completa...", "blue")
-        self.run_command(cmd)
+        
+        def after_verify():
+            """Callback após verificação"""
+            self._run_verify_with_output(cmd, db)
+        
+        self.run_command(cmd, on_finish=after_verify)
+
+    def _run_verify_with_output(self, cmd, db_path):
+        def worker():
+            try:
+                self.log("📋 Analisando resultado da verificação...", "info")
+                
+                CREATE_NO_WINDOW = 0x08000000 if sys.platform == "win32" else 0
+
+                process = subprocess.Popen(
+                    cmd,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                    encoding="utf-8",
+                    errors='replace',
+                    creationflags=CREATE_NO_WINDOW
+                )
+
+                output_lines = []
+                for line in iter(process.stdout.readline, ''):
+                    if line.strip():
+                        output_lines.append(line.strip())
+                        self.log(line.strip(), "info")
+
+                process.stdout.close()
+                return_code = process.wait()
+
+                output_text = "\n".join(output_lines)
+                
+                # Analisa se há erros
+                has_correctable_errors = self._analyze_verify_output(output_text)
+                
+                if has_correctable_errors:
+                    self.after(0, lambda: self._offer_correction(db_path, output_text))
+                else:
+                    if return_code == 0:
+                        self.after(0, lambda: self.set_status("✅ Verificação concluída - Sem erros encontrados", "green"))
+                        self.log("✅ Verificação concluída - Sem erros encontrados", "success")
+                    else:
+                        self.after(0, lambda: self.set_status("⚠️ Verificação concluída com erros", "orange"))
+
+            except Exception as e:
+                self.after(0, lambda: self.log(f"❌ Erro na análise: {e}", "error"))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _analyze_verify_output(self, output_text):
+        """Analisa erros"""
+        # Padrões de erros que podem ser corrigidos com gfix
+        correctable_patterns = [
+            "corrupt",
+            "damage",
+            "broken",
+            "checksum error",
+            "checksum mismatch",
+            "validation error",
+            "structural error",
+            "index is broken",
+            "transaction inventory page is corrupt",
+            "bad checksum",
+            "page is used twice",
+            "wrong page type",
+            "orphan node",
+            "missing index node",
+            "blob not found"
+        ]
+        
+        output_lower = output_text.lower()
+        for pattern in correctable_patterns:
+            if pattern in output_lower:
+                self.log(f"🔍 Erro corrigível detectado: {pattern}", "warning")
+                return True
+        
+        return False
+
+    def _offer_correction(self, db_path, verify_output):
+        """Oferece opção de correção quando erros são detectados"""
+        db_name = Path(db_path).name
+        
+        # Cria janela personalizada
+        correction_win = tk.Toplevel(self)
+        correction_win.title("Correção de Erros Detectados")
+        correction_win.geometry("600x400")
+        correction_win.resizable(True, True)
+        correction_win.transient(self)
+        correction_win.grab_set()
+        
+        # Centraliza
+        self.update_idletasks()
+        x = self.winfo_x() + (self.winfo_width() // 2) - 300
+        y = self.winfo_y() + (self.winfo_height() // 2) - 200
+        correction_win.geometry(f"+{x}+{y}")
+        
+        # Ícone
+        icon_path = BASE_DIR / "images" / "icon.ico"
+        if icon_path.exists():
+            correction_win.iconbitmap(str(icon_path))
+        
+        # Frame principal
+        main_frame = ttk.Frame(correction_win, padding=15)
+        main_frame.pack(fill="both", expand=True)
+        
+        # Título
+        ttk.Label(main_frame, 
+                text="🚨 ERROS DETECTADOS NO BANCO DE DADOS",
+                font=("Arial", 12, "bold"),
+                foreground="red").pack(pady=(0, 10))
+        
+        ttk.Label(main_frame,
+                text=f"Banco: {db_name}",
+                font=("Arial", 10, "bold")).pack(pady=(0, 5))
+        
+        # Aviso
+        warning_frame = ttk.LabelFrame(main_frame, text="⚠️ AVISO DE SEGURANÇA", padding=10)
+        warning_frame.pack(fill="x", pady=10)
+        
+        warning_text = (
+            "Foram detectados erros no banco de dados que PODEM ser corrigidos automaticamente.\n\n"
+            "🚨 É EXTREMAMENTE RECOMENDADO criar uma cópia de segurança do banco antes \n"
+            "de prosseguir com a correção, pois o processo pode ser irreversível.\n\n"
+            "Deseja criar um backup de segurança agora?"
+        )
+        
+        ttk.Label(warning_frame, text=warning_text, justify="left").pack()
+        
+        # Detalhes dos erros
+        details_frame = ttk.LabelFrame(main_frame, text="📋 Detalhes dos Erros Detectados", padding=10)
+        details_frame.pack(fill="both", expand=True, pady=10)
+        
+        details_text = scrolledtext.ScrolledText(details_frame, height=8, wrap=tk.WORD)
+        details_text.pack(fill="both", expand=True)
+        details_text.insert("1.0", verify_output)
+        details_text.config(state="disabled")
+        
+        # Frame de botões
+        btn_frame = ttk.Frame(main_frame)
+        btn_frame.pack(fill="x", pady=15)
+        
+        def create_backup_and_fix():
+            """Cria backup e depois executa correção"""
+            correction_win.destroy()
+            self._create_safety_backup(db_path, lambda: self._execute_correction(db_path))
+        
+        def fix_without_backup():
+            """Executa correção sem backup"""
+            if not messagebox.askyesno(
+                "Confirmação de Risco",
+                "⚠️ ALTO RISCO ⚠️\n\n"
+                "Você está prestes a executar uma correção sem backup de segurança.\n"
+                "Esta operação pode corromper permanentemente o banco de dados.\n\n"
+                "Tem certeza que deseja continuar SEM backup?",
+                icon=messagebox.WARNING
+            ):
+                return
+            
+            correction_win.destroy()
+            self._execute_correction(db_path)
+        
+        def cancel_operation():
+            """Cancela a operação"""
+            correction_win.destroy()
+            self.log("❌ Correção cancelada pelo usuário", "warning")
+        
+        # Botões
+        ttk.Button(btn_frame, 
+                text="💾 Criar Backup e Corrigir",
+                command=create_backup_and_fix,
+                cursor="hand2").pack(side="left", padx=5)
+        
+        ttk.Button(btn_frame,
+                text="⚡ Corrigir sem Backup (RISCO)",
+                command=fix_without_backup,
+                cursor="hand2").pack(side="left", padx=5)
+        
+        ttk.Button(btn_frame,
+                text="❌ Cancelar",
+                command=cancel_operation,
+                cursor="hand2").pack(side="right", padx=5)
+
+    def _create_safety_backup(self, db_path, on_complete):
+        """Cria um backup de segurança"""
+        gbak = self.conf.get("gbak_path") or find_executable("gbak.exe")
+        if not gbak:
+            messagebox.showerror("Erro", "gbak.exe não encontrado para criar backup de segurança.")
+            return
+        
+        backup_dir = Path(self.conf.get("backup_dir", DEFAULT_BACKUP_DIR))
+        safety_dir = backup_dir / "safety_backups"
+        safety_dir.mkdir(parents=True, exist_ok=True)
+        
+        timestamp = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
+        db_name = Path(db_path).stem
+        backup_name = f"safety_backup_{db_name}_{timestamp}.fbk"
+        backup_path = safety_dir / backup_name
+        
+        self.log(f"🛡️ Criando backup de segurança: {backup_path}", "info")
+        
+        cmd = [
+            gbak, "-b", 
+            "-se", f"{self.conf.get('firebird_host', 'localhost')}:service_mgr",
+            db_path, 
+            str(backup_path), 
+            "-user", self.conf.get("firebird_user", "SYSDBA"), 
+            "-pass", self.conf.get("firebird_password", "masterkey")
+        ]
+        
+        def after_backup():
+            self.log(f"✅ Backup de segurança criado: {backup_path}", "success")
+            on_complete()
+        
+        self.run_command(cmd, on_finish=after_backup)
+
+    def _execute_correction(self, db_path):
+        """Executa o comando de correção do banco"""
+        gfix = self.conf.get("gfix_path") or find_executable("gfix.exe")
+        if not gfix:
+            messagebox.showerror("Erro", "gfix.exe não encontrado.")
+            return
+        
+        self.log("🔧 Iniciando correção do banco de dados...", "warning")
+        
+        # Comando de correção
+        cmd = [
+            gfix, "-mend", "-ig",
+            db_path,
+            "-user", self.conf.get("firebird_user", "SYSDBA"),
+            "-pass", self.conf.get("firebird_password", "masterkey")
+        ]
+        
+        self.log(f"⚙️ Comando de correção: {' '.join(cmd)}", "info")
+        self.set_status("Executando correção do banco...", "orange")
+        
+        def after_correction():
+            """Callback após correção"""
+            self.log("✅ Correção concluída. Verificando resultado...", "info")
+            
+            # Executa nova verificação para confirmar correção
+            verify_cmd = [
+                gfix, "-v", "-full", 
+                db_path, 
+                "-user", self.conf.get("firebird_user", "SYSDBA"), 
+                "-pass", self.conf.get("firebird_password", "masterkey")
+            ]
+            
+            def after_reverify():
+                self.set_status("✅ Processo de correção finalizado", "green")
+                messagebox.showinfo(
+                    "Correção Concluída", 
+                    "O processo de correção foi finalizado.\n\n"
+                    "Verifique o log para detalhes sobre o resultado da operação."
+                )
+            
+            self.run_command(verify_cmd, on_finish=after_reverify)
+        
+        self.run_command(cmd, on_finish=after_correction)
+
+    def repair_database(self):
+        """Executa correção completa do banco de dados"""
+        gfix = self.conf.get("gfix_path") or find_executable("gfix.exe")
+        if not gfix:
+            messagebox.showerror("Erro", "gfix.exe não encontrado. Configure o caminho nas configurações.")
+            return
+        
+        self.conf["gfix_path"] = gfix
+        save_config(self.conf)
+
+        db = filedialog.askopenfilename(
+            title="Selecione o banco de dados para correção", 
+            filetypes=[("Firebird Database", "*.fdb"), ("Todos os arquivos", "*.*")]
+        )
+        if not db:
+            return
+
+        # Pergunta se deseja criar backup de segurança
+        response = messagebox.askyesno(
+            "Correção de Banco - Backup de Segurança",
+            "🚨 CORREÇÃO DE BANCO DE DADOS 🚨\n\n"
+            "Esta operação tentará corrigir erros estruturais no banco.\n\n"
+            "É EXTREMAMENTE RECOMENDADO criar um backup de segurança\n"
+            "antes de prosseguir, pois a correção pode ser irreversível.\n\n"
+            "Deseja criar um backup de segurança agora?",
+            icon=messagebox.WARNING
+        )
+        
+        if response:
+            # Cria backup de segurança antes da correção
+            self._create_safety_backup(db, lambda: self._execute_advanced_repair(db))
+        else:
+            # Pergunta confirmação para prosseguir sem backup
+            if messagebox.askyesno(
+                "Confirmação de Risco",
+                "⚠️ ALTO RISCO ⚠️\n\n"
+                "Você está prestes a executar uma correção sem backup de segurança.\n"
+                "Esta operação pode corromper permanentemente o banco de dados.\n\n"
+                "Tem certeza que deseja continuar SEM backup?",
+                icon=messagebox.WARNING
+            ):
+                self._execute_advanced_repair(db)
+
+    def _execute_advanced_repair(self, db_path):
+        """Executa correção avançada do banco"""
+        gfix = self.conf.get("gfix_path") or find_executable("gfix.exe")
+        if not gfix:
+            return
+        
+        self.log("🛠️ Iniciando correção avançada do banco...", "warning")
+        self.set_status("Executando correção avançada...", "orange")
+        
+        # Sequência de comandos de correção
+        repair_commands = [
+            {
+                "name": "Limpeza de transações",
+                "cmd": [gfix, "-sweep", db_path, "-user", self.conf["firebird_user"], "-pass", self.conf["firebird_password"]]
+            },
+            {
+                "name": "Correção de índices",
+                "cmd": [gfix, "-mend", "-ignore", db_path, "-user", self.conf["firebird_user"], "-pass", self.conf["firebird_password"]]
+            },
+            {
+                "name": "Validação completa",
+                "cmd": [gfix, "-validate", "-full", db_path, "-user", self.conf["firebird_user"], "-pass", self.conf["firebird_password"]]
+            },
+            {
+                "name": "Correção de páginas",
+                "cmd": [gfix, "-mend", "-ig", db_path, "-user", self.conf["firebird_user"], "-pass", self.conf["firebird_password"]]
+            }
+        ]
+        
+        def run_next_command(index=0):
+            if index < len(repair_commands):
+                command_info = repair_commands[index]
+                self.log(f"🔧 Executando: {command_info['name']}", "info")
+                
+                def after_command():
+                    self.log(f"✅ {command_info['name']} concluído", "success")
+                    run_next_command(index + 1)
+                
+                self.run_command(command_info['cmd'], after_command)
+            else:
+                self.log("✅ Correção avançada concluída!", "success")
+                self.set_status("Correção avançada concluída", "green")
+                
+                # Executa verificação final
+                verify_cmd = [
+                    gfix, "-v", "-full", 
+                    db_path, 
+                    "-user", self.conf.get("firebird_user", "SYSDBA"), 
+                    "-pass", self.conf.get("firebird_password", "masterkey")
+                ]
+                
+                def after_final_verify():
+                    messagebox.showinfo(
+                        "Correção Concluída",
+                        "✅ Correção avançada do banco concluída!\n\n"
+                        "Todos os procedimentos de correção foram executados.\n"
+                        "Verifique o log para detalhes sobre o resultado."
+                    )
+                
+                self.run_command(verify_cmd, on_finish=after_final_verify)
+        
+        # Inicia a sequência de correção
+        run_next_command()
 
     def kill(self):
         """Finaliza processos do Firebird"""
