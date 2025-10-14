@@ -1,5 +1,5 @@
 """
-Firebird Manager
+Gerenciador Firebird
 Autor: MMaffi
 """
 
@@ -59,7 +59,7 @@ else:
     BASE_DIR = Path(__file__).resolve().parent
 
 CONFIG_PATH = BASE_DIR / "config.json"
-LOG_FILE = BASE_DIR / "firebird_manager.log"
+LOG_FILE = BASE_DIR / "gerenciador_firebird.log"
 DEFAULT_BACKUP_DIR = BASE_DIR / "backups"
 DEFAULT_KEEP_BACKUPS = 5
 
@@ -228,7 +228,7 @@ def get_disk_space(path):
         return None
 
 # ------------ APP PRINCIPAL ------------
-class FirebirdManagerApp(tk.Tk):
+class GerenciadorFirebirdApp(tk.Tk):
     def __init__(self):
         super().__init__()
         
@@ -262,7 +262,7 @@ class FirebirdManagerApp(tk.Tk):
             if self.conf.get("start_minimized", False):
                 self.after(1000, self.minimize_to_tray)
             
-            self.logger.info("Firebird Manager iniciado com sucesso")
+            self.logger.info("Gerenciador Firebird iniciado com sucesso")
             
         except Exception as e:
             self.logger.critical(f"Falha crítica ao iniciar aplicação: {e}")
@@ -271,7 +271,7 @@ class FirebirdManagerApp(tk.Tk):
 
     def _setup_ui(self):
         """Configura interface do usuário"""
-        self.title("Firebird Manager")
+        self.title("Gerenciador Firebird")
         
         # Ícone da aplicação
         icon_path = BASE_DIR / "images" / "icon.ico"
@@ -690,12 +690,12 @@ class FirebirdManagerApp(tk.Tk):
             
             # Menu do ícone
             menu = pystray.Menu(
-                pystray.MenuItem("Abrir Firebird Manager", self.restore_from_tray),
+                pystray.MenuItem("Abrir Gerenciador Firebird", self.restore_from_tray),
                 pystray.MenuItem("Sair", self.quit_application)
             )
             
             # Cria o ícone
-            self.tray_icon = pystray.Icon("firebird_manager", image, "Firebird Manager", menu)
+            self.tray_icon = pystray.Icon("gerenciador_firebird", image, "Gerenciador Firebird", menu)
             
             # Inicia o ícone em uma thread separada
             def run_tray():
@@ -793,13 +793,13 @@ class FirebirdManagerApp(tk.Tk):
             script_path = sys.executable if getattr(sys, 'frozen', False) else sys.argv[0]
             
             # Cria o atalho
-            shortcut_path = os.path.join(startup_folder, "Firebird Manager.lnk")
+            shortcut_path = os.path.join(startup_folder, "Gerenciador Firebird.lnk")
             
             shell = Dispatch('WScript.Shell')
             shortcut = shell.CreateShortCut(shortcut_path)
             shortcut.Targetpath = script_path
             shortcut.WorkingDirectory = os.path.dirname(script_path)
-            shortcut.Description = "Firebird Manager"
+            shortcut.Description = "Gerenciador Firebird"
             
             # Adiciona argumento para iniciar minimizado se configurado
             if self.conf.get("start_minimized", False):
@@ -830,7 +830,7 @@ class FirebirdManagerApp(tk.Tk):
             subkey = r"Software\Microsoft\Windows\CurrentVersion\Run"
             
             with winreg.OpenKey(key, subkey, 0, winreg.KEY_SET_VALUE) as reg_key:
-                winreg.SetValueEx(reg_key, "Firebird Manager", 0, winreg.REG_SZ, script_path)
+                winreg.SetValueEx(reg_key, "Gerenciador Firebird", 0, winreg.REG_SZ, script_path)
             
             self.log("✅ Programa adicionado à inicialização via registro", "success")
             return True
@@ -844,7 +844,7 @@ class FirebirdManagerApp(tk.Tk):
         try:
             # Remove atalho da pasta Inicializar
             startup_folder = winshell.startup()
-            shortcut_path = os.path.join(startup_folder, "Firebird Manager.lnk")
+            shortcut_path = os.path.join(startup_folder, "Gerenciador Firebird.lnk")
             
             if os.path.exists(shortcut_path):
                 os.remove(shortcut_path)
@@ -867,7 +867,7 @@ class FirebirdManagerApp(tk.Tk):
             
             with winreg.OpenKey(key, subkey, 0, winreg.KEY_SET_VALUE) as reg_key:
                 try:
-                    winreg.DeleteValue(reg_key, "Firebird Manager")
+                    winreg.DeleteValue(reg_key, "Gerenciador Firebird")
                     self.log("✅ Programa removido da inicialização (registro)", "success")
                 except FileNotFoundError:
                     pass
@@ -883,14 +883,14 @@ class FirebirdManagerApp(tk.Tk):
             
             with winreg.OpenKey(key, subkey, 0, winreg.KEY_READ) as reg_key:
                 try:
-                    winreg.QueryValueEx(reg_key, "Firebird Manager")
+                    winreg.QueryValueEx(reg_key, "Gerenciador Firebird")
                     return True
                 except FileNotFoundError:
                     pass
             
             # Verifica na pasta Inicializar
             startup_folder = winshell.startup()
-            shortcut_path = os.path.join(startup_folder, "Firebird Manager.lnk")
+            shortcut_path = os.path.join(startup_folder, "Gerenciador Firebird.lnk")
             return os.path.exists(shortcut_path)
             
         except Exception:
@@ -2017,7 +2017,7 @@ class FirebirdManagerApp(tk.Tk):
         try:
             report = []
             report.append("=" * 50)
-            report.append("RELATÓRIO DO SISTEMA FIREDBIRD MANAGER")
+            report.append("RELATÓRIO DO SISTEMA GERENCIADOR FIREBIRD")
             report.append(f"Gerado em: {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}")
             report.append("=" * 50)
             
@@ -2402,7 +2402,7 @@ if __name__ == "__main__":
                 )
         
         # Iniciar aplicação
-        app = FirebirdManagerApp()
+        app = GerenciadorFirebirdApp()
         app.mainloop()
         
     except Exception as e:
