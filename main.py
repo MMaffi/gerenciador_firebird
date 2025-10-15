@@ -573,7 +573,7 @@ class GerenciadorFirebirdApp(tk.Tk):
         )
         repair_btn.grid(row=0, column=1, padx=10, pady=10, sticky="ew")
         
-        # LIMPEZA DE BANCO (SWEEP) - NOVO BOTÃO
+        # LIMPEZA DE BANCO (SWEEP)
         sweep_btn = ttk.Button(
             tools_grid, 
             text="🧹 Limpar Banco",
@@ -1598,7 +1598,7 @@ class GerenciadorFirebirdApp(tk.Tk):
             # Cria backup de segurança antes da correção
             self._create_safety_backup(db, lambda: self._execute_advanced_repair(db, do_sweep))
         else:
-            # Pergunta confirmação para prosseguir sem backup
+            # Confirmação para prosseguir sem backup
             if messagebox.askyesno(
                 "Confirmação de Risco",
                 "⚠️ ALTO RISCO ⚠️\n\n"
@@ -1618,7 +1618,7 @@ class GerenciadorFirebirdApp(tk.Tk):
         self.log("🛠️ Iniciando correção avançada do banco...", "warning")
         self.set_status("Executando correção avançada...", "orange")
         
-        # Sequência de comandos de correção - APENAS OS DOIS COMANDOS
+        # Sequência de comandos de correção
         repair_commands = []
         
         # Adiciona sweep apenas se solicitado
@@ -1905,7 +1905,7 @@ class GerenciadorFirebirdApp(tk.Tk):
         messagebox.showinfo("Sucesso", f"Agendamento '{schedule_data['name']}' criado com sucesso!")
 
     def _setup_schedule(self, schedule_data):
-        """Configura o agendamento na biblioteca schedule"""
+        """Configura o agendamento"""
         try:
             # Remove agendamentos existentes com o mesmo nome
             schedule.clear(schedule_data["name"])
