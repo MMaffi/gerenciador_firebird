@@ -573,6 +573,16 @@ class GerenciadorFirebirdApp(tk.Tk):
         )
         repair_btn.grid(row=0, column=1, padx=10, pady=10, sticky="ew")
         
+        # LIMPEZA DE BANCO (SWEEP) - NOVO BOTÃO
+        sweep_btn = ttk.Button(
+            tools_grid, 
+            text="🧹 Limpar Banco",
+            cursor="hand2", 
+            command=self.sweep_database,
+            width=20
+        )
+        sweep_btn.grid(row=1, column=0, padx=10, pady=10, sticky="ew")
+        
         # Migração
         migrate_btn = ttk.Button(
             tools_grid, 
@@ -581,7 +591,7 @@ class GerenciadorFirebirdApp(tk.Tk):
             command=self.migrate_database,
             width=20
         )
-        migrate_btn.grid(row=1, column=0, padx=10, pady=10, sticky="ew")
+        migrate_btn.grid(row=1, column=1, padx=10, pady=10, sticky="ew")
         
         # Relatório
         report_btn = ttk.Button(
@@ -591,7 +601,7 @@ class GerenciadorFirebirdApp(tk.Tk):
             command=self.generate_system_report,
             width=20
         )
-        report_btn.grid(row=1, column=1, padx=10, pady=10, sticky="ew")
+        report_btn.grid(row=2, column=0, padx=10, pady=10, sticky="ew")
         
         # Verificar espaço
         space_btn = ttk.Button(
@@ -601,7 +611,7 @@ class GerenciadorFirebirdApp(tk.Tk):
             command=self.check_disk_space,
             width=20
         )
-        space_btn.grid(row=2, column=0, padx=10, pady=10, sticky="ew")
+        space_btn.grid(row=2, column=1, padx=10, pady=10, sticky="ew")
         
         # Importar configurações
         import_btn = ttk.Button(
@@ -611,7 +621,7 @@ class GerenciadorFirebirdApp(tk.Tk):
             command=self.import_config,
             width=20
         )
-        import_btn.grid(row=2, column=1, padx=10, pady=10, sticky="ew")
+        import_btn.grid(row=3, column=0, padx=10, pady=10, sticky="ew")
 
         # Exportar configurações
         export_btn = ttk.Button(
@@ -621,7 +631,7 @@ class GerenciadorFirebirdApp(tk.Tk):
             command=self.export_config,
             width=20
         )
-        export_btn.grid(row=3, column=0, padx=10, pady=10, sticky="ew")
+        export_btn.grid(row=3, column=1, padx=10, pady=10, sticky="ew")
         
         # Configurar colunas
         tools_grid.columnconfigure(0, weight=1)
@@ -1373,7 +1383,7 @@ class GerenciadorFirebirdApp(tk.Tk):
         # Cria janela personalizada
         correction_win = tk.Toplevel(self)
         correction_win.title("Correção de Erros Detectados")
-        correction_win.geometry("600x400")
+        correction_win.geometry("600x500")
         correction_win.resizable(True, True)
         correction_win.transient(self)
         correction_win.grab_set()
@@ -1565,6 +1575,14 @@ class GerenciadorFirebirdApp(tk.Tk):
         if not db:
             return
 
+        # Pergunta se deseja fazer limpeza antes da correção
+        do_sweep = messagebox.askyesno(
+            "Limpeza do Banco",
+            "Deseja executar a limpeza do banco (sweep) antes da correção?\n\n"
+            "✅ Com sweep: Limpa registros antigos e otimiza o banco\n"
+            "❌ Sem sweep: Apenas correção de erros estruturais"
+        )
+
         # Pergunta se deseja criar backup de segurança
         response = messagebox.askyesno(
             "Correção de Banco - Backup de Segurança",
@@ -1578,7 +1596,7 @@ class GerenciadorFirebirdApp(tk.Tk):
         
         if response:
             # Cria backup de segurança antes da correção
-            self._create_safety_backup(db, lambda: self._execute_advanced_repair(db))
+            self._create_safety_backup(db, lambda: self._execute_advanced_repair(db, do_sweep))
         else:
             # Pergunta confirmação para prosseguir sem backup
             if messagebox.askyesno(
@@ -1589,9 +1607,9 @@ class GerenciadorFirebirdApp(tk.Tk):
                 "Tem certeza que deseja continuar SEM backup?",
                 icon=messagebox.WARNING
             ):
-                self._execute_advanced_repair(db)
+                self._execute_advanced_repair(db, do_sweep)
 
-    def _execute_advanced_repair(self, db_path):
+    def _execute_advanced_repair(self, db_path, do_sweep=False):
         """Executa correção avançada do banco"""
         gfix = self.conf.get("gfix_path") or find_executable("gfix.exe")
         if not gfix:
@@ -1600,16 +1618,18 @@ class GerenciadorFirebirdApp(tk.Tk):
         self.log("🛠️ Iniciando correção avançada do banco...", "warning")
         self.set_status("Executando correção avançada...", "orange")
         
-        # Sequência de comandos de correção
-        repair_commands = [
-            {
-                "name": "Limpeza de transações",
+        # Sequência de comandos de correção - APENAS OS DOIS COMANDOS
+        repair_commands = []
+        
+        # Adiciona sweep apenas se solicitado
+        if do_sweep:
+            repair_commands.append({
+                "name": "Limpeza de registros antigos",
                 "cmd": [gfix, "-sweep", db_path, "-user", self.conf["firebird_user"], "-pass", self.conf["firebird_password"]]
-            },
-            {
-                "name": "Correção de índices",
-                "cmd": [gfix, "-mend", "-ignore", db_path, "-user", self.conf["firebird_user"], "-pass", self.conf["firebird_password"]]
-            },
+            })
+        
+        # Comandos principais de correção
+        repair_commands.extend([
             {
                 "name": "Validação completa",
                 "cmd": [gfix, "-validate", "-full", db_path, "-user", self.conf["firebird_user"], "-pass", self.conf["firebird_password"]]
@@ -1618,7 +1638,7 @@ class GerenciadorFirebirdApp(tk.Tk):
                 "name": "Correção de páginas",
                 "cmd": [gfix, "-mend", "-ig", db_path, "-user", self.conf["firebird_user"], "-pass", self.conf["firebird_password"]]
             }
-        ]
+        ])
         
         def run_next_command(index=0):
             if index < len(repair_commands):
@@ -1654,6 +1674,57 @@ class GerenciadorFirebirdApp(tk.Tk):
         
         # Inicia a sequência de correção
         run_next_command()
+
+    def sweep_database(self):
+        """Executa apenas a limpeza (sweep) do banco de dados"""
+        gfix = self.conf.get("gfix_path") or find_executable("gfix.exe")
+        if not gfix:
+            messagebox.showerror("Erro", "gfix.exe não encontrado. Configure o caminho nas configurações.")
+            return
+        
+        self.conf["gfix_path"] = gfix
+        save_config(self.conf)
+
+        db = filedialog.askopenfilename(
+            title="Selecione o banco de dados para limpeza", 
+            filetypes=[("Firebird Database", "*.fdb"), ("Todos os arquivos", "*.*")]
+        )
+        if not db:
+            return
+
+        # Pergunta confirmação
+        if not messagebox.askyesno(
+            "Limpeza do Banco",
+            "🧹 LIMPEZA DO BANCO DE DADOS (SWEEP)\n\n"
+            "Esta operação irá:\n"
+            "• Limpar registros antigos\n"
+            "• Remover transações obsoletas\n"
+            "• Otimizar o espaço do banco\n\n"
+            "Deseja continuar?",
+            icon=messagebox.QUESTION
+        ):
+            return
+
+        # Comando de sweep
+        cmd = [
+            gfix, "-sweep",
+            db,
+            "-user", self.conf.get("firebird_user", "SYSDBA"),
+            "-pass", self.conf.get("firebird_password", "masterkey")
+        ]
+
+        self.log(f"🧹 Iniciando limpeza do banco: {db}", "info")
+        self.set_status("Executando limpeza do banco...", "blue")
+
+        def after_sweep():
+            self.log("✅ Limpeza do banco concluída com sucesso!", "success")
+            messagebox.showinfo(
+                "Limpeza Concluída",
+                "✅ Limpeza do banco concluída com sucesso!\n\n"
+                "Registros antigos foram removidos e o banco foi otimizado."
+            )
+
+        self.run_command(cmd, on_finish=after_sweep)
 
     def kill(self):
         """Finaliza processos do Firebird"""
@@ -1945,10 +2016,10 @@ class GerenciadorFirebirdApp(tk.Tk):
         
         self.log("🔧 Iniciando otimização do banco...", "info")
         
-        # Comandos de otimização
+        # Comandos de otimização - APENAS OS ESSENCIAIS
         commands = [
             [gfix, "-sweep", db, "-user", self.conf["firebird_user"], "-pass", self.conf["firebird_password"]],
-            [gfix, "-mend", db, "-user", self.conf["firebird_user"], "-pass", self.conf["firebird_password"]],
+            [gfix, "-validate", "-full", db, "-user", self.conf["firebird_user"], "-pass", self.conf["firebird_password"]],
         ]
         
         def run_next_command(index=0):
@@ -1956,7 +2027,14 @@ class GerenciadorFirebirdApp(tk.Tk):
                 self.run_command(commands[index], lambda: run_next_command(index + 1))
             else:
                 self.log("✅ Otimização concluída com sucesso!", "success")
-        
+                messagebox.showinfo(
+                    "Otimização Concluída",
+                    "✅ Otimização do banco concluída!\n\n"
+                    "Foram executadas as seguintes operações:\n"
+                    "• Limpeza de registros antigos (sweep)\n"
+                    "• Validação completa do banco"
+                )
+    
         run_next_command()
 
     def migrate_database(self):
