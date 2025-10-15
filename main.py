@@ -63,6 +63,15 @@ LOG_FILE = BASE_DIR / "gerenciador_firebird.log"
 DEFAULT_BACKUP_DIR = BASE_DIR / "backups"
 DEFAULT_KEEP_BACKUPS = 5
 
+# Opções disponíveis de pageSize
+PAGE_SIZE_OPTIONS = [
+    "1024",  
+    "2048",    
+    "4096",   
+    "8192",  # (padrão)
+    "16384", 
+]
+
 # ---------- LOGGING ----------
 def setup_logging():
     LOG_FILE.parent.mkdir(exist_ok=True)
@@ -97,6 +106,7 @@ def load_config():
         "firebird_password": "masterkey",
         "firebird_host": "localhost",
         "firebird_port": "26350",  # Porta padrão
+        "page_size": "8192",  # PageSize padrão
         "auto_monitor": True,
         "monitor_interval": 30,
         "minimize_to_tray": True,
@@ -164,16 +174,22 @@ def cleanup_old_backups(backup_dir: Path, keep: int):
     """Remove backups antigos mantendo apenas os X mais recentes"""
     try:
         files = list(backup_dir.glob("*.fbk")) + list(backup_dir.glob("*.zip"))
+        
+        if len(files) <= keep:
+            return
+            
         files.sort(key=lambda f: f.stat().st_mtime, reverse=True)
+
+        files_to_remove = files[keep:]
         
         removed_count = 0
-        for old in files[keep:]:
+        for old_file in files_to_remove:
             try:
-                old.unlink()
+                old_file.unlink()
                 removed_count += 1
-                logging.info(f"Backup antigo removido: {old.name}")
+                logging.info(f"Backup antigo removido: {old_file.name}")
             except Exception as e:
-                logging.warning(f"Falha ao remover {old.name}: {e}")
+                logging.warning(f"Falha ao remover {old_file.name}: {e}")
         
         if removed_count > 0:
             logging.info(f"Limpeza concluída: {removed_count} arquivos removidos")
@@ -781,6 +797,16 @@ class GerenciadorFirebirdApp(tk.Tk):
                 self.log(f"❌ Erro no agendador: {e}", "error")
             time.sleep(60)  # Verifica a cada minuto
 
+    def stop_scheduler(self):
+        """Para o agendador"""
+        self.schedule_running = False
+        if self.schedule_thread and self.schedule_thread.is_alive():
+            self.schedule_thread.join(timeout=5)
+        self.log("🛑 Agendador de backups parado", "info")
+
+    def __del__(self):
+        self.stop_scheduler()
+
     # ---------- INICIALIZAÇÃO COM WINDOWS ----------
     def toggle_startup(self, enabled):
         self.apply_startup_setting(enabled)
@@ -994,12 +1020,19 @@ class GerenciadorFirebirdApp(tk.Tk):
                     text=True,
                     encoding="utf-8",
                     errors='replace',
-                    creationflags=CREATE_NO_WINDOW
+                    creationflags=CREATE_NO_WINDOW,
+                    bufsize=1,
+                    universal_newlines=True
                 )
 
-                for line in iter(process.stdout.readline, ''):
+                output_lines = []
+                while True:
+                    line = process.stdout.readline()
+                    if not line and process.poll() is not None:
+                        break
                     if line.strip():
-                        self.log(line.strip(), "info")
+                        output_lines.append(line.strip())
+                        self.after(100, lambda l=line.strip(): self.log(l, "info"))
 
                 process.stdout.close()
                 return_code = process.wait()
@@ -1089,23 +1122,59 @@ class GerenciadorFirebirdApp(tk.Tk):
         self.set_status("Gerando backup, por favor aguarde...", "blue")
 
         def after_backup():
-            if compress and backup_path.exists():
-                try:
-                    zip_path = backup_path.with_suffix(".zip")
-                    with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=6) as z:
-                        z.write(backup_path, arcname=backup_path.name)
-                    backup_path.unlink()
-                    self.log(f"🟩 Backup compactado: {zip_path}", "success")
-                except Exception as e:
-                    self.log(f"Erro ao compactar backup: {e}", "error")
-            
-            # Limpa backups antigos
-            keep_count = int(self.conf.get("keep_backups", DEFAULT_KEEP_BACKUPS))
-            cleanup_old_backups(backup_dir, keep_count)
-            
+            if compress:
+                # Compactação em uma thread separada
+                self._compress_backup_in_thread(backup_path)
+            else:
+                keep_count = int(self.conf.get("keep_backups", DEFAULT_KEEP_BACKUPS))
+                cleanup_old_backups(backup_dir, keep_count)
+                
             self.logger.info(f"Backup finalizado com sucesso: {db}")
 
         self.run_command(cmd, on_finish=after_backup)
+
+    def _compress_backup_in_thread(self, backup_path):
+        """Executa a compactação do backup em uma thread separada"""
+        def compress_worker():
+            try:
+                self.after(0, lambda: self.set_status("Compactando backup...", "blue"))
+                self.after(0, lambda: self.log("🗜️ Iniciando compactação do backup...", "info"))
+                
+                zip_path = backup_path.with_suffix(".zip")
+                
+                self.after(0, lambda: self.log(f"📦 Compactando: {backup_path.name} -> {zip_path.name}", "info"))
+                
+                with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=6) as z:
+                    z.write(backup_path, arcname=backup_path.name)
+                
+                # Remove o arquivo .fbk original após compactação bem-sucedida
+                backup_path.unlink()
+                
+                # Atualiza a interface na thread principal
+                self.after(0, lambda: self.log(f"✅ Backup compactado com sucesso: {zip_path.name}", "success"))
+                self.after(0, lambda: self.set_status("Backup compactado com sucesso!", "green"))
+                
+            except Exception as e:
+                # Em caso de erro, mantém o arquivo .fbk original
+                error_msg = f"❌ Erro ao compactar backup: {e}"
+                self.after(0, lambda: self.log(error_msg, "error"))
+                self.after(0, lambda: self.set_status("Erro na compactação", "red"))
+                
+            finally:
+                self.after(0, self._cleanup_old_backups_after_compress)
+        
+        # Inicia a thread de compactação
+        threading.Thread(target=compress_worker, daemon=True).start()
+
+    def _cleanup_old_backups_after_compress(self):
+        """Limpa backups antigos após a compactação"""
+        try:
+            backup_dir = Path(self.conf.get("backup_dir", DEFAULT_BACKUP_DIR))
+            keep_count = int(self.conf.get("keep_backups", DEFAULT_KEEP_BACKUPS))
+            cleanup_old_backups(backup_dir, keep_count)
+            self.log("🧹 Limpeza de backups antigos concluída", "info")
+        except Exception as e:
+            self.log(f"⚠️ Erro durante limpeza de backups: {e}", "warning")
 
     def execute_scheduled_backup(self, db_path, schedule_name, compress=True):
         """Executa um backup agendado"""
@@ -1137,6 +1206,8 @@ class GerenciadorFirebirdApp(tk.Tk):
 
             def run_scheduled_backup():
                 try:
+                    CREATE_NO_WINDOW = 0x08000000 if sys.platform == "win32" else 0
+                    
                     process = subprocess.Popen(
                         cmd,
                         stdout=subprocess.PIPE,
@@ -1144,34 +1215,63 @@ class GerenciadorFirebirdApp(tk.Tk):
                         text=True,
                         encoding="utf-8",
                         errors='replace',
-                        creationflags=subprocess.CREATE_NO_WINDOW
+                        creationflags=CREATE_NO_WINDOW
                     )
 
                     output, _ = process.communicate()
                     return_code = process.wait()
 
                     if return_code == 0:
-                        if compress and backup_path.exists():
-                            zip_path = backup_path.with_suffix(".zip")
-                            with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=6) as z:
-                                z.write(backup_path, arcname=backup_path.name)
-                            backup_path.unlink()
+                        self.log(f"✅ Backup agendado '{schedule_name}' gerado com sucesso", "success")
                         
-                        keep_count = int(self.conf.get("keep_backups", DEFAULT_KEEP_BACKUPS))
-                        cleanup_old_backups(backup_dir, keep_count)
-                        
-                        self.log(f"✅ Backup agendado '{schedule_name}' concluído com sucesso", "success")
+                        if compress:
+                            # Compacta em thread separada
+                            self._compress_scheduled_backup(backup_path, schedule_name)
+                        else:
+                            # Limpa backups antigos
+                            keep_count = int(self.conf.get("keep_backups", DEFAULT_KEEP_BACKUPS))
+                            cleanup_old_backups(backup_dir, keep_count)
+                            self.log(f"✅ Backup agendado '{schedule_name}' finalizado", "success")
+                            
                     else:
-                        self.log(f"❌ Backup agendado '{schedule_name}' falhou: {output}", "error")
+                        self.log(f"❌ Backup agendado '{schedule_name}' falhou. Código: {return_code}", "error")
+                        if output:
+                            self.log(f"📄 Saída do comando: {output}", "error")
 
                 except Exception as e:
                     self.log(f"❌ Erro no backup agendado '{schedule_name}': {e}", "error")
 
-            # Executa em thread separada para não travar a interface
+            # Executa em thread separada
             threading.Thread(target=run_scheduled_backup, daemon=True).start()
 
         except Exception as e:
             self.log(f"❌ Erro ao executar backup agendado '{schedule_name}': {e}", "error")
+
+    def _compress_scheduled_backup(self, backup_path, schedule_name):
+        """Compacta backup agendado em thread separada"""
+        def compress_worker():
+            try:
+                self.log(f"🗜️ Compactando backup agendado: {schedule_name}", "info")
+                
+                zip_path = backup_path.with_suffix(".zip")
+                
+                with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=6) as z:
+                    z.write(backup_path, arcname=backup_path.name)
+
+                backup_path.unlink()
+
+                backup_dir = Path(self.conf.get("backup_dir", DEFAULT_BACKUP_DIR))
+                keep_count = int(self.conf.get("keep_backups", DEFAULT_KEEP_BACKUPS))
+                cleanup_old_backups(backup_dir, keep_count)
+                
+                self.log(f"✅ Backup agendado '{schedule_name}' compactado com sucesso: {zip_path.name}", "success")
+                
+            except Exception as e:
+                error_msg = f"❌ Erro ao compactar backup agendado '{schedule_name}': {e}"
+                self.log(error_msg, "error")
+        
+        # Inicia a thread de compactação
+        threading.Thread(target=compress_worker, daemon=True).start()
 
     def restore(self):
         """Restaura backup para banco de dados"""
@@ -1190,67 +1290,217 @@ class GerenciadorFirebirdApp(tk.Tk):
         if not bkp:
             return
 
-        tmpdir = None
-        actual_backup = bkp
-        extracted_files = []
-        
+        self.current_backup_file = bkp
+        self.extracted_files = []
+        self.extraction_cancelled = False
+
         # Extrai se for arquivo ZIP
         if bkp.lower().endswith(".zip"):
-            try:
-                # Extrai caso for ZIP
-                zip_path = Path(bkp)
-                extract_dir = zip_path.parent / f"{zip_path.stem}_extracted"
-                extract_dir.mkdir(exist_ok=True)
-                
-                self.log(f"Extraindo arquivo ZIP para: {extract_dir}", "info")
-                
-                with zipfile.ZipFile(bkp, "r") as z:
-                    z.extractall(extract_dir)
-                
-                fbks = list(extract_dir.glob("*.fbk"))
-                if not fbks:
-                    messagebox.showerror("Erro", "Nenhum arquivo .fbk encontrado dentro do ZIP.")
-                    shutil.rmtree(extract_dir, ignore_errors=True)
-                    return
-                
-                actual_backup = str(fbks[0])
-                extracted_files.append(extract_dir)
-                self.log(f"Arquivo extraído: {actual_backup}", "success")
-                
-            except Exception as e:
-                messagebox.showerror("Erro", f"Falha ao extrair arquivo ZIP: {e}")
-                if extract_dir.exists():
-                    shutil.rmtree(extract_dir, ignore_errors=True)
-                return
+            self._extract_zip_backup(bkp)
+        else:
+            self._restore_fbk_backup(bkp)
 
+    def _extract_zip_backup(self, bkp):
+        """Extrai backup ZIP"""
+        try:
+            # Cria janela de extração
+            self._create_progress_window()
+            self.update_idletasks()
+
+            zip_path = Path(bkp)
+            self.extract_dir = zip_path.parent / f"{zip_path.stem}_extracted"
+            self.extract_dir.mkdir(exist_ok=True)
+            
+            self.log(f"📦 Iniciando extração do arquivo ZIP: {zip_path.name}", "info")
+            self._update_progress(f"Analisando arquivo: {zip_path.name}")
+            
+            # Mostra informações do arquivo ZIP
+            try:
+                with zipfile.ZipFile(bkp, "r") as z:
+                    file_list = z.namelist()
+                    total_files = len(file_list)
+                    self._update_progress(f"Encontrados {total_files} arquivos no ZIP")
+                    time.sleep(0.5)
+            except:
+                pass
+            
+            self._update_progress("Iniciando extração...")
+            
+            def extract_with_progress():
+                """Extrai arquivo ZIP com feedback de progresso"""
+                try:
+                    with zipfile.ZipFile(bkp, "r") as z:
+                        total_files = len(z.filelist)
+                        files_extracted = 0
+                        
+                        for zinfo in z.filelist:
+                            if self.extraction_cancelled:
+                                break
+
+                            files_extracted += 1
+                            self._update_progress(f"Extraindo arquivo {files_extracted} de {total_files}")
+                            
+                            z.extract(zinfo, self.extract_dir)
+                            
+                            self.after(10, lambda: None)
+                    
+                    return not self.extraction_cancelled
+                    
+                except Exception as e:
+                    self.log(f"❌ Erro durante extração: {e}", "error")
+                    return False
+            
+            # Executa extração em thread separada
+            def extraction_worker():
+                success = extract_with_progress()
+                
+                self.after(0, lambda: self._after_extraction(success, bkp))
+            
+            threading.Thread(target=extraction_worker, daemon=True).start()
+            
+        except Exception as e:
+            self._close_progress_window()
+            messagebox.showerror("Erro", f"Falha ao extrair arquivo ZIP: {e}")
+            if hasattr(self, 'extract_dir') and self.extract_dir.exists():
+                shutil.rmtree(self.extract_dir, ignore_errors=True)
+
+    def _create_progress_window(self):
+        """Cria janela de progresso para extração"""
+        self.progress_win = tk.Toplevel(self)
+        self.progress_win.title("Extraindo Backup")
+        self.progress_win.geometry("450x200")
+        self.progress_win.resizable(False, False)
+        self.progress_win.transient(self)
+        self.progress_win.grab_set()
+        
+        # Centraliza
+        self.update_idletasks()
+        x = self.winfo_x() + (self.winfo_width() // 2) - 225
+        y = self.winfo_y() + (self.winfo_height() // 2) - 75
+        self.progress_win.geometry(f"+{x}+{y}")
+        
+        # Ícone
+        icon_path = BASE_DIR / "images" / "icon.ico"
+        if icon_path.exists():
+            self.progress_win.iconbitmap(str(icon_path))
+        
+        # Frame principal
+        main_frame = ttk.Frame(self.progress_win, padding=20)
+        main_frame.pack(fill="both", expand=True)
+        
+        # Mensagem
+        ttk.Label(main_frame, 
+                text="📦 Extraindo arquivo ZIP...",
+                font=("Arial", 10, "bold")).pack(pady=10)
+        
+        self.progress_label = ttk.Label(main_frame, 
+                                    text="Preparando extração...",
+                                    font=("Arial", 9))
+        self.progress_label.pack(pady=5)
+        
+        # Barra de progresso
+        self.progress_bar = ttk.Progressbar(main_frame, 
+                                        mode='indeterminate',
+                                        length=350)
+        self.progress_bar.pack(pady=10)
+        self.progress_bar.start(10)
+        
+        # Botão cancelar
+        cancel_btn = ttk.Button(main_frame, 
+                            text="❌ Cancelar Extração",
+                            command=self._cancel_extraction)
+        cancel_btn.pack(pady=5)
+
+    def _update_progress(self, message):
+        """Atualiza mensagem de progresso"""
+        if hasattr(self, 'progress_label') and hasattr(self, 'progress_win'):
+            self.progress_label.config(text=message)
+            self.progress_win.update_idletasks()
+
+    def _close_progress_window(self):
+        """Fecha janela de progresso"""
+        if hasattr(self, 'progress_win'):
+            self.progress_win.destroy()
+
+    def _cancel_extraction(self):
+        """Cancela a extração"""
+        self.extraction_cancelled = True
+        self.log("❌ Extração cancelada pelo usuário", "warning")
+        self._close_progress_window()
+
+    def _after_extraction(self, extraction_success, bkp):
+        self._close_progress_window()
+        
+        if not extraction_success:
+            if hasattr(self, 'extract_dir') and self.extract_dir.exists():
+                shutil.rmtree(self.extract_dir, ignore_errors=True)
+            return
+        
+        # Busca arquivos .fbk extraídos
+        extract_dir = Path(bkp).parent / f"{Path(bkp).stem}_extracted"
+        fbks = list(extract_dir.glob("*.fbk"))
+        
+        if not fbks:
+            messagebox.showerror("Erro", "Nenhum arquivo .fbk encontrado dentro do ZIP.")
+            if extract_dir.exists():
+                shutil.rmtree(extract_dir, ignore_errors=True)
+            return
+        
+        actual_backup = str(fbks[0])
+        self.extracted_files.append(extract_dir)
+        
+        self.log(f"✅ Arquivo extraído: {actual_backup}", "success")
+        
+        # Continua com seleção de destino
         dest = filedialog.asksaveasfilename(
             title="Salvar banco restaurado como...",
             defaultextension=".fdb",
             filetypes=[("Firebird Database", "*.fdb")]
         )
+        
         if not dest:
             # Limpa arquivos extraídos se o usuário cancelar
-            for item in extracted_files:
+            for item in self.extracted_files:
                 if Path(item).exists():
                     if Path(item).is_dir():
                         shutil.rmtree(item, ignore_errors=True)
                     else:
                         Path(item).unlink(missing_ok=True)
             return
+        
+        self._perform_restoration(actual_backup, dest, self.extracted_files)
 
+    def _restore_fbk_backup(self, bkp):
+        """Restaura backup .fbk diretamente"""
+        dest = filedialog.asksaveasfilename(
+            title="Salvar banco restaurado como...",
+            defaultextension=".fdb",
+            filetypes=[("Firebird Database", "*.fdb")]
+        )
+        if not dest:
+            return
+
+        # Executa restauração
+        self._perform_restoration(bkp, dest, [])
+
+    def _perform_restoration(self, backup_path, destination_path, extracted_files):
+        """Executa a restauração do backup"""
+        gbak = self.conf.get("gbak_path")
+        
         # Constrói comando gbak restauração
         cmd = [
             gbak, "-c", 
             "-se", self._get_service_mgr_string(),
-            actual_backup, 
-            dest, 
+            backup_path, 
+            destination_path, 
             "-user", self.conf.get("firebird_user", "SYSDBA"), 
             "-pass", self.conf.get("firebird_password", "masterkey"),
-            "-rep"
+            "-page_size", self.conf.get("page_size", "8192")
         ]
 
-        self.log(f"🟦 Restaurando backup: {actual_backup} -> {dest}", "info")
+        self.log(f"🟦 Restaurando backup: {Path(backup_path).name} -> {Path(destination_path).name}", "info")
         self.log(f"🔌 Conectando em: {self._get_service_mgr_string()}", "info")
+        self.log(f"📄 PageSize configurado: {self.conf.get('page_size', '8192')}", "info")
         self.set_status("Restaurando banco, aguarde...", "blue")
 
         def cleanup_extracted():
@@ -1270,7 +1520,7 @@ class GerenciadorFirebirdApp(tk.Tk):
         self.run_command(cmd, on_finish=cleanup_extracted)
 
     def verify(self):
-        """Verifica integridade do banco e oferece correção se necessário"""
+        """Verifica integridade do banco"""
         gfix = self.conf.get("gfix_path") or find_executable("gfix.exe")
         if not gfix:
             messagebox.showerror("Erro", "gfix.exe não encontrado. Configure o caminho nas configurações.")
@@ -1349,7 +1599,7 @@ class GerenciadorFirebirdApp(tk.Tk):
 
     def _analyze_verify_output(self, output_text):
         """Analisa erros"""
-        # Padrões de erros que podem ser corrigidos com gfix
+        # Erros que podem ser corrigidos com gfix
         correctable_patterns = [
             "corrupt",
             "damage",
@@ -1505,7 +1755,7 @@ class GerenciadorFirebirdApp(tk.Tk):
             db_path, 
             str(backup_path), 
             "-user", self.conf.get("firebird_user", "SYSDBA"), 
-            "-pass", self.conf.get("firebird_password", "masterkey")
+            "-pass", self.conf.get("firebird_password", "masterkey"),
         ]
         
         def after_backup():
@@ -2073,7 +2323,8 @@ class GerenciadorFirebirdApp(tk.Tk):
             gbak, "-c", 
             "-se", self._get_service_mgr_string(),
             str(backup_file), str(migrated_file),
-            "-user", self.conf["firebird_user"], "-pass", self.conf["firebird_password"], "-rep"
+            "-user", self.conf["firebird_user"], "-pass", self.conf["firebird_password"],
+            "-page_size", self.conf.get("page_size", "8192")
         ]
         
         def after_backup():
@@ -2109,6 +2360,7 @@ class GerenciadorFirebirdApp(tk.Tk):
             report.append(f"- Host: {self.conf.get('firebird_host', 'localhost')}")
             report.append(f"- Porta: {self.conf.get('firebird_port', '26350')}")
             report.append(f"- Usuário: {self.conf.get('firebird_user', 'SYSDBA')}")
+            report.append(f"- PageSize: {self.conf.get('page_size', '8192')}")
             
             # Espaço em disco
             backup_dir = Path(self.conf.get("backup_dir", DEFAULT_BACKUP_DIR))
@@ -2218,7 +2470,7 @@ class GerenciadorFirebirdApp(tk.Tk):
                 with open(config_file, 'r', encoding='utf-8') as f:
                     new_conf = json.load(f)
                 
-                keep_keys = ['backup_dir', 'gbak_path', 'gfix_path', 'firebird_host', 'firebird_port']
+                keep_keys = ['backup_dir', 'gbak_path', 'gfix_path', 'firebird_host', 'firebird_port', 'page_size']
                 for key in keep_keys:
                     if key in self.conf:
                         new_conf[key] = self.conf[key]
@@ -2243,7 +2495,7 @@ class GerenciadorFirebirdApp(tk.Tk):
         """Janela de configurações"""
         win = tk.Toplevel(self)
         win.title("Configurações do Sistema")
-        win.geometry("500x650")
+        win.geometry("500x700")
         win.resizable(False, False)
         win.transient(self)
         win.grab_set()
@@ -2251,7 +2503,7 @@ class GerenciadorFirebirdApp(tk.Tk):
         # Centraliza
         self.update_idletasks()
         x = self.winfo_x() + (self.winfo_width() // 2) - 250
-        y = self.winfo_y() + (self.winfo_height() // 2) - 325
+        y = self.winfo_y() + (self.winfo_height() // 2) - 350
         win.geometry(f"+{x}+{y}")
 
         # Ícone
@@ -2303,9 +2555,16 @@ class GerenciadorFirebirdApp(tk.Tk):
         pass_var = tk.StringVar(value=self.conf.get("firebird_password", "masterkey"))
         ttk.Entry(firebird_frame, textvariable=pass_var, width=40, show="*").grid(row=6, column=1, padx=5)
 
-        ttk.Label(firebird_frame, text="Qtd. backups a manter:").grid(row=7, column=0, sticky="w", pady=8)
+        ttk.Label(firebird_frame, text="PageSize:").grid(row=7, column=0, sticky="w", pady=8)
+        page_size_var = tk.StringVar(value=self.conf.get("page_size", "8192"))
+        page_size_combo = ttk.Combobox(firebird_frame, textvariable=page_size_var, 
+                                      values=PAGE_SIZE_OPTIONS, state="readonly", width=10)
+        page_size_combo.grid(row=7, column=1, sticky="w", padx=5)
+        ttk.Label(firebird_frame, text="(1KB, 2KB, 4KB, 8KB, 16KB)").grid(row=7, column=1, sticky="e", padx=5)
+
+        ttk.Label(firebird_frame, text="Qtd. backups a manter:").grid(row=8, column=0, sticky="w", pady=8)
         keep_var = tk.IntVar(value=self.conf.get("keep_backups", DEFAULT_KEEP_BACKUPS))
-        ttk.Spinbox(firebird_frame, from_=1, to=100, textvariable=keep_var, width=10).grid(row=7, column=1, sticky="w", padx=5)
+        ttk.Spinbox(firebird_frame, from_=1, to=100, textvariable=keep_var, width=10).grid(row=8, column=1, sticky="w", padx=5)
 
         # Aba Sistema
         system_frame = ttk.Frame(notebook, padding=10)
@@ -2348,6 +2607,7 @@ class GerenciadorFirebirdApp(tk.Tk):
                 "firebird_port": port_var.get(),
                 "firebird_user": user_var.get(),
                 "firebird_password": pass_var.get(),
+                "page_size": page_size_var.get(),
                 "keep_backups": keep_var.get(),
                 "auto_monitor": monitor_var.get(),
                 "monitor_interval": interval_var.get(),
