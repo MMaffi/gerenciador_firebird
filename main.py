@@ -62,6 +62,7 @@ CONFIG_PATH = BASE_DIR / "config.json"
 LOG_FILE = BASE_DIR / "gerenciador_firebird.log"
 DEFAULT_BACKUP_DIR = BASE_DIR / "backups"
 DEFAULT_KEEP_BACKUPS = 5
+REPORTS_DIR = BASE_DIR / "Relatórios"
 
 # Opções disponíveis de pageSize
 PAGE_SIZE_OPTIONS = [
@@ -100,13 +101,14 @@ def load_config():
     default = {
         "gbak_path": "",
         "gfix_path": "",
+        "gstat_path": "",
         "backup_dir": str(DEFAULT_BACKUP_DIR),
         "keep_backups": DEFAULT_KEEP_BACKUPS,
         "firebird_user": "SYSDBA",
         "firebird_password": "masterkey",
         "firebird_host": "localhost",
-        "firebird_port": "26350",  # Porta padrão
-        "page_size": "8192",  # PageSize padrão
+        "firebird_port": "26350",
+        "page_size": "8192",
         "auto_monitor": True,
         "monitor_interval": 30,
         "minimize_to_tray": True,
@@ -201,7 +203,7 @@ def kill_firebird_processes():
     """Mata processos do Firebird de forma segura"""
     firebird_processes = [
         "fb_inet_server.exe", "fbserver.exe", "fbguard.exe", 
-        "firebird.exe", "ibserver.exe", "gbak.exe", "gfix.exe"
+        "firebird.exe", "ibserver.exe", "gbak.exe", "gfix.exe", "gstat.exe"
     ]
     
     killed_count = 0
@@ -609,36 +611,26 @@ class GerenciadorFirebirdApp(tk.Tk):
         )
         migrate_btn.grid(row=1, column=1, padx=10, pady=10, sticky="ew")
         
-        # Relatório
+        # Relatório do Sistema
         report_btn = ttk.Button(
             tools_grid, 
-            text="📊 Gerar Relatório",
+            text="📊 Relatório Sistema",
             cursor="hand2", 
             command=self.generate_system_report,
             width=20
         )
         report_btn.grid(row=2, column=0, padx=10, pady=10, sticky="ew")
         
-        # Verificar espaço
-        space_btn = ttk.Button(
+        # Relatório do Banco (gstat)
+        gstat_report_btn = ttk.Button(
             tools_grid, 
-            text="💾 Verificar Espaço",
+            text="📈 Relatório Banco",
             cursor="hand2", 
-            command=self.check_disk_space,
+            command=self.generate_gstat_report,
             width=20
         )
-        space_btn.grid(row=2, column=1, padx=10, pady=10, sticky="ew")
+        gstat_report_btn.grid(row=2, column=1, padx=10, pady=10, sticky="ew")
         
-        # Importar configurações
-        import_btn = ttk.Button(
-            tools_grid, 
-            text="📥 Importar Config",
-            cursor="hand2", 
-            command=self.import_config,
-            width=20
-        )
-        import_btn.grid(row=3, column=0, padx=10, pady=10, sticky="ew")
-
         # Exportar configurações
         export_btn = ttk.Button(
             tools_grid, 
@@ -647,7 +639,27 @@ class GerenciadorFirebirdApp(tk.Tk):
             command=self.export_config,
             width=20
         )
-        export_btn.grid(row=3, column=1, padx=10, pady=10, sticky="ew")
+        export_btn.grid(row=3, column=0, padx=10, pady=10, sticky="ew")
+
+        # Importar configurações
+        import_btn = ttk.Button(
+            tools_grid, 
+            text="📥 Importar Config",
+            cursor="hand2", 
+            command=self.import_config,
+            width=20
+        )
+        import_btn.grid(row=3, column=1, padx=10, pady=10, sticky="ew")
+
+        # Verificar espaço
+        space_btn = ttk.Button(
+            tools_grid, 
+            text="💾 Verificar Espaço",
+            cursor="hand2", 
+            command=self.check_disk_space,
+            width=20
+        )
+        space_btn.grid(row=4, column=0, padx=10, pady=10, sticky="ew")
         
         # Configurar colunas
         tools_grid.columnconfigure(0, weight=1)
@@ -2067,7 +2079,7 @@ class GerenciadorFirebirdApp(tk.Tk):
             # Adiciona processos
             firebird_processes = [
                 "fb_inet_server.exe", "fbserver.exe", "fbguard.exe", 
-                "firebird.exe", "ibserver.exe", "gbak.exe", "gfix.exe"
+                "firebird.exe", "ibserver.exe", "gbak.exe", "gfix.exe", "gstat.exe"
             ]
             
             for proc in psutil.process_iter(['pid', 'name', 'status']):
@@ -2341,19 +2353,110 @@ class GerenciadorFirebirdApp(tk.Tk):
         
         self.run_command(backup_cmd, after_backup)
 
+    # ---------- RELATÓRIOS ----------
+    def generate_gstat_report(self):
+        """Gera relatório detalhado do banco usando gstat.exe"""
+        gstat = self.conf.get("gstat_path") or find_executable("gstat.exe")
+        if not gstat:
+            messagebox.showerror("Erro", "gstat.exe não encontrado. Configure o caminho nas configurações.")
+            return
+        
+        self.conf["gstat_path"] = gstat
+        save_config(self.conf)
+
+        db = filedialog.askopenfilename(
+            title="Selecione o banco para análise",
+            filetypes=[("Firebird Database", "*.fdb"), ("Todos os arquivos", "*.*")]
+        )
+        if not db:
+            return
+
+        # Cria pasta de relatórios se não existir
+        REPORTS_DIR.mkdir(exist_ok=True)
+        
+        timestamp = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
+        db_name = Path(db).stem
+        report_filename = f"relatorio_gstat_{db_name}_{timestamp}.txt"
+        report_path = REPORTS_DIR / report_filename
+
+        self.log(f"📈 Iniciando análise do banco com gstat: {db}", "info")
+        self.set_status("Gerando relatório do banco...", "blue")
+
+        # Comando gstat
+        cmd = [
+            gstat, "-h",
+            db,
+            "-user", self.conf.get("firebird_user", "SYSDBA"),
+            "-pass", self.conf.get("firebird_password", "masterkey")
+        ]
+
+        def after_gstat():
+            self.log(f"✅ Relatório gstat salvo: {report_path}", "success")
+            messagebox.showinfo(
+                "Relatório Gerado",
+                f"Relatório do banco gerado com sucesso!\n\n"
+                f"Arquivo: {report_path}\n\n"
+                f"O relatório contém informações detalhadas sobre:\n"
+                f"• Estrutura do banco\n• Tabelas e índices\n• Estatísticas de uso"
+            )
+
+        def run_gstat_with_output():
+            try:
+                CREATE_NO_WINDOW = 0x08000000 if sys.platform == "win32" else 0
+
+                process = subprocess.Popen(
+                    cmd,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                    encoding="utf-8",
+                    errors='replace',
+                    creationflags=CREATE_NO_WINDOW
+                )
+
+                output_lines = []
+                for line in iter(process.stdout.readline, ''):
+                    if line.strip():
+                        output_lines.append(line.strip())
+                        self.log(line.strip(), "info")
+
+                process.stdout.close()
+                return_code = process.wait()
+
+                # Salva o relatório em arquivo
+                with open(report_path, 'w', encoding='utf-8') as f:
+                    f.write(f"Relatório GSTAT - {db_name}\n")
+                    f.write(f"Gerado em: {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}\n")
+                    f.write("=" * 50 + "\n\n")
+                    f.write("\n".join(output_lines))
+
+                if return_code == 0:
+                    self.after(0, after_gstat)
+                else:
+                    self.after(0, lambda: self.log(f"❌ Gstat retornou código de erro: {return_code}", "error"))
+
+            except Exception as e:
+                self.after(0, lambda: self.log(f"❌ Erro ao executar gstat: {e}", "error"))
+
+        threading.Thread(target=run_gstat_with_output, daemon=True).start()
+
     def generate_system_report(self):
         """Gera relatório detalhado do sistema"""
         try:
+            # Cria pasta de relatórios se não existir
+            REPORTS_DIR.mkdir(exist_ok=True)
+            
             report = []
-            report.append("=" * 50)
+            report.append("=" * 60)
             report.append("RELATÓRIO DO SISTEMA GERENCIADOR FIREBIRD")
             report.append(f"Gerado em: {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}")
-            report.append("=" * 50)
+            report.append("=" * 60)
             
             # Informações do sistema
             report.append("\n📊 INFORMAÇÕES DO SISTEMA:")
             report.append(f"- Diretório base: {BASE_DIR}")
             report.append(f"- Diretório de backups: {self.conf.get('backup_dir', 'Não definido')}")
+            report.append(f"- Diretório de relatórios: {REPORTS_DIR}")
             
             # Configurações Firebird
             report.append(f"\n🔥 CONFIGURAÇÕES FIREBIRD:")
@@ -2361,6 +2464,9 @@ class GerenciadorFirebirdApp(tk.Tk):
             report.append(f"- Porta: {self.conf.get('firebird_port', '26350')}")
             report.append(f"- Usuário: {self.conf.get('firebird_user', 'SYSDBA')}")
             report.append(f"- PageSize: {self.conf.get('page_size', '8192')}")
+            report.append(f"- Gbak: {self.conf.get('gbak_path', 'Não configurado')}")
+            report.append(f"- Gfix: {self.conf.get('gfix_path', 'Não configurado')}")
+            report.append(f"- Gstat: {self.conf.get('gstat_path', 'Não configurado')}")
             
             # Espaço em disco
             backup_dir = Path(self.conf.get("backup_dir", DEFAULT_BACKUP_DIR))
@@ -2397,11 +2503,12 @@ class GerenciadorFirebirdApp(tk.Tk):
             report.append(f"\n🪟 INICIALIZAÇÃO COM WINDOWS: {startup_status}")
             
             # Salva relatório
-            report_path = BASE_DIR / f"relatorio_sistema_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            report_path = REPORTS_DIR / f"relatorio_sistema_{timestamp}.txt"
             with open(report_path, 'w', encoding='utf-8') as f:
                 f.write('\n'.join(report))
             
-            self.log(f"📊 Relatório gerado: {report_path}", "success")
+            self.log(f"📊 Relatório do sistema gerado: {report_path}", "success")
             messagebox.showinfo("Relatório", f"Relatório salvo em:\n{report_path}")
             
         except Exception as e:
@@ -2410,7 +2517,7 @@ class GerenciadorFirebirdApp(tk.Tk):
     def _get_firebird_processes(self):
         """Retorna lista de processos do Firebird"""
         processes = []
-        firebird_procs = ["fb_inet_server.exe", "fbserver.exe", "fbguard.exe", "firebird.exe", "ibserver.exe"]
+        firebird_procs = ["fb_inet_server.exe", "fbserver.exe", "fbguard.exe", "firebird.exe", "ibserver.exe", "gbak.exe", "gfix.exe", "gstat.exe"]
         
         for proc in psutil.process_iter(['pid', 'name']):
             if proc.info['name'] and any(fb in proc.info['name'].lower() for fb in [p.lower() for p in firebird_procs]):
@@ -2470,7 +2577,7 @@ class GerenciadorFirebirdApp(tk.Tk):
                 with open(config_file, 'r', encoding='utf-8') as f:
                     new_conf = json.load(f)
                 
-                keep_keys = ['backup_dir', 'gbak_path', 'gfix_path', 'firebird_host', 'firebird_port', 'page_size']
+                keep_keys = ['backup_dir', 'gbak_path', 'gfix_path', 'gstat_path', 'firebird_host', 'firebird_port', 'page_size']
                 for key in keep_keys:
                     if key in self.conf:
                         new_conf[key] = self.conf[key]
@@ -2532,39 +2639,47 @@ class GerenciadorFirebirdApp(tk.Tk):
         ttk.Button(firebird_frame, text="...", width=3,
                   command=lambda: self.pick_exe(gfix_var, "gfix.exe")).grid(row=1, column=2)
 
-        ttk.Label(firebird_frame, text="Pasta de backups:").grid(row=2, column=0, sticky="w", pady=8)
+        # Caminho do gstat.exe
+        ttk.Label(firebird_frame, text="Local do gstat.exe:").grid(row=2, column=0, sticky="w", pady=8)
+        gstat_var = tk.StringVar(value=self.conf.get("gstat_path", ""))
+        gstat_entry = ttk.Entry(firebird_frame, textvariable=gstat_var, width=40)
+        gstat_entry.grid(row=2, column=1, padx=5)
+        ttk.Button(firebird_frame, text="...", width=3,
+                  command=lambda: self.pick_exe(gstat_var, "gstat.exe")).grid(row=2, column=2)
+
+        ttk.Label(firebird_frame, text="Pasta de backups:").grid(row=3, column=0, sticky="w", pady=8)
         backup_var = tk.StringVar(value=self.conf.get("backup_dir", ""))
         backup_entry = ttk.Entry(firebird_frame, textvariable=backup_var, width=40)
-        backup_entry.grid(row=2, column=1, padx=5)
+        backup_entry.grid(row=3, column=1, padx=5)
         ttk.Button(firebird_frame, text="...", width=3,
-                  command=lambda: self.pick_dir(backup_var)).grid(row=2, column=2)
+                  command=lambda: self.pick_dir(backup_var)).grid(row=3, column=2)
 
-        ttk.Label(firebird_frame, text="Host do Firebird:").grid(row=3, column=0, sticky="w", pady=8)
+        ttk.Label(firebird_frame, text="Host do Firebird:").grid(row=4, column=0, sticky="w", pady=8)
         host_var = tk.StringVar(value=self.conf.get("firebird_host", "localhost"))
-        ttk.Entry(firebird_frame, textvariable=host_var, width=40).grid(row=3, column=1, padx=5)
+        ttk.Entry(firebird_frame, textvariable=host_var, width=40).grid(row=4, column=1, padx=5)
 
-        ttk.Label(firebird_frame, text="Porta do Firebird:").grid(row=4, column=0, sticky="w", pady=8)
+        ttk.Label(firebird_frame, text="Porta do Firebird:").grid(row=5, column=0, sticky="w", pady=8)
         port_var = tk.StringVar(value=self.conf.get("firebird_port", "26350"))
-        ttk.Entry(firebird_frame, textvariable=port_var, width=40).grid(row=4, column=1, padx=5)
+        ttk.Entry(firebird_frame, textvariable=port_var, width=40).grid(row=5, column=1, padx=5)
 
-        ttk.Label(firebird_frame, text="Usuário:").grid(row=5, column=0, sticky="w", pady=8)
+        ttk.Label(firebird_frame, text="Usuário:").grid(row=6, column=0, sticky="w", pady=8)
         user_var = tk.StringVar(value=self.conf.get("firebird_user", "SYSDBA"))
-        ttk.Entry(firebird_frame, textvariable=user_var, width=40).grid(row=5, column=1, padx=5)
+        ttk.Entry(firebird_frame, textvariable=user_var, width=40).grid(row=6, column=1, padx=5)
 
-        ttk.Label(firebird_frame, text="Senha:").grid(row=6, column=0, sticky="w", pady=8)
+        ttk.Label(firebird_frame, text="Senha:").grid(row=7, column=0, sticky="w", pady=8)
         pass_var = tk.StringVar(value=self.conf.get("firebird_password", "masterkey"))
-        ttk.Entry(firebird_frame, textvariable=pass_var, width=40, show="*").grid(row=6, column=1, padx=5)
+        ttk.Entry(firebird_frame, textvariable=pass_var, width=40, show="*").grid(row=7, column=1, padx=5)
 
-        ttk.Label(firebird_frame, text="PageSize:").grid(row=7, column=0, sticky="w", pady=8)
+        ttk.Label(firebird_frame, text="PageSize:").grid(row=8, column=0, sticky="w", pady=8)
         page_size_var = tk.StringVar(value=self.conf.get("page_size", "8192"))
         page_size_combo = ttk.Combobox(firebird_frame, textvariable=page_size_var, 
                                       values=PAGE_SIZE_OPTIONS, state="readonly", width=10)
-        page_size_combo.grid(row=7, column=1, sticky="w", padx=5)
-        ttk.Label(firebird_frame, text="(1KB, 2KB, 4KB, 8KB, 16KB)").grid(row=7, column=1, sticky="e", padx=5)
+        page_size_combo.grid(row=8, column=1, sticky="w", padx=5)
+        ttk.Label(firebird_frame, text="(1KB, 2KB, 4KB, 8KB, 16KB)").grid(row=8, column=1, sticky="e", padx=5)
 
-        ttk.Label(firebird_frame, text="Qtd. backups a manter:").grid(row=8, column=0, sticky="w", pady=8)
+        ttk.Label(firebird_frame, text="Qtd. backups a manter:").grid(row=9, column=0, sticky="w", pady=8)
         keep_var = tk.IntVar(value=self.conf.get("keep_backups", DEFAULT_KEEP_BACKUPS))
-        ttk.Spinbox(firebird_frame, from_=1, to=100, textvariable=keep_var, width=10).grid(row=8, column=1, sticky="w", padx=5)
+        ttk.Spinbox(firebird_frame, from_=1, to=100, textvariable=keep_var, width=10).grid(row=9, column=1, sticky="w", padx=5)
 
         # Aba Sistema
         system_frame = ttk.Frame(notebook, padding=10)
@@ -2602,6 +2717,7 @@ class GerenciadorFirebirdApp(tk.Tk):
             self.conf.update({
                 "gbak_path": gbak_var.get(),
                 "gfix_path": gfix_var.get(),
+                "gstat_path": gstat_var.get(),
                 "backup_dir": backup_var.get(),
                 "firebird_host": host_var.get(),
                 "firebird_port": port_var.get(),
