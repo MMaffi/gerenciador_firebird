@@ -1,15 +1,15 @@
 ; ==============================================
-; Instalador Firebird Manager
+; Instalador Gerenciador Firebird
 ; Autor: MMaffi
 ; ==============================================
 
 [Setup]
-AppName=Firebird Manager
-AppVersion=2025.10.13.1714
-DefaultDirName=C:\FirebirdManager
-DefaultGroupName=Firebird Manager
+AppName=Gerenciador Firebird
+AppVersion=2025.10.16.0816
+DefaultDirName=C:\GerenciadorFirebird
+DefaultGroupName=Gerenciador Firebird
 OutputDir=.
-OutputBaseFilename=FirebirdManager_Installer
+OutputBaseFilename=GerenciadorFirebird_Installer
 Compression=lzma
 SolidCompression=yes
 PrivilegesRequired=admin
@@ -21,17 +21,17 @@ SetupIconFile=images\icon.ico
 Name: "portuguese"; MessagesFile: "compiler:Languages\Portuguese.isl"
 
 [Files]
-Source: "dist\FirebirdManager.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "dist\GerenciadorFirebird.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "images\*"; DestDir: "{app}\images"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
 ; Atalho no menu iniciar
-Name: "{group}\Firebird Manager"; Filename: "{app}\FirebirdManager.exe"; WorkingDir: "{app}"; IconFilename: "{app}\images\icon.ico"
+Name: "{group}\Gerenciador Firebird"; Filename: "{app}\GerenciadorFirebird.exe"; WorkingDir: "{app}"; IconFilename: "{app}\images\icon.ico"
 ; Atalho na Área de Trabalho (opcional)
-Name: "{userdesktop}\Firebird Manager"; Filename: "{app}\FirebirdManager.exe"; WorkingDir: "{app}"; IconFilename: "{app}\images\icon.ico"; Tasks: desktopicon
+Name: "{userdesktop}\Gerenciador Firebird"; Filename: "{app}\GerenciadorFirebird.exe"; WorkingDir: "{app}"; IconFilename: "{app}\images\icon.ico"; Tasks: desktopicon
 
 [Tasks]
 Name: "desktopicon"; Description: "Criar atalho na Área de Trabalho"; GroupDescription: "Opções adicionais"; Flags: unchecked
 
 [Run]
-Filename: "{app}\FirebirdManager.exe"; Description: "Executar Firebird Manager"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\GerenciadorFirebird.exe"; Description: "Executar Gerenciador Firebird"; Flags: nowait postinstall skipifsilent
