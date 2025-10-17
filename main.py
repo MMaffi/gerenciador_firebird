@@ -459,7 +459,7 @@ class GerenciadorFirebirdApp(tk.Tk):
         self.disk_status = ttk.Label(disk_frame, text="🔄 Calculando espaço...")
         self.disk_status.pack(anchor="w")
         
-        # Frame principal - Gerenciador de Processos do Sistema
+        # Frame principal - Gerenciador de Processos
         main_frame = ttk.Frame(monitor_frame)
         main_frame.pack(fill="both", expand=True, padx=10, pady=5)
         
@@ -477,9 +477,9 @@ class GerenciadorFirebirdApp(tk.Tk):
         search_btn_frame.pack(side="left", padx=10)
         
         ttk.Button(search_btn_frame, text="🔍 Pesquisar", 
-                  cursor="hand2", command=self._refresh_all_processes).pack(side="left", padx=2)
+                cursor="hand2", command=self._refresh_all_processes).pack(side="left", padx=2)
         ttk.Button(search_btn_frame, text="🔄 Atualizar Tudo",
-                  cursor="hand2", command=self._refresh_all_processes).pack(side="left", padx=2)
+                cursor="hand2", command=self._refresh_all_processes).pack(side="left", padx=2)
         
         # Lista de todos os processos
         all_processes_frame = ttk.LabelFrame(main_frame, text="Todos os Processos do Sistema", padding=10)
@@ -487,14 +487,22 @@ class GerenciadorFirebirdApp(tk.Tk):
         
         # Treeview para todos os processos
         self.all_processes_tree = ttk.Treeview(all_processes_frame, 
-                                             columns=("PID", "Nome", "Usuário", "Status"), 
-                                             show="headings",
-                                             selectmode="extended")
+                                            columns=("PID", "Nome", "Usuário", "Status"), 
+                                            show="headings",
+                                            selectmode="extended")
         
-        self.all_processes_tree.heading("PID", text="PID")
-        self.all_processes_tree.heading("Nome", text="Nome do Processo")
-        self.all_processes_tree.heading("Usuário", text="Usuário")
-        self.all_processes_tree.heading("Status", text="Status")
+        # Configurar os cabeçalhos com função de ordenação
+        self.all_processes_tree.heading("PID", text="PID", command=lambda: self._sort_treeview("PID"))
+        self.all_processes_tree.heading("Nome", text="Nome do Processo", command=lambda: self._sort_treeview("Nome"))
+        self.all_processes_tree.heading("Usuário", text="Usuário", command=lambda: self._sort_treeview("Usuário"))
+        self.all_processes_tree.heading("Status", text="Status", command=lambda: self._sort_treeview("Status"))
+
+        self.sort_order = {
+            "PID": False,
+            "Nome": False, 
+            "Usuário": False,
+            "Status": False
+        }
         
         self.all_processes_tree.column("PID", width=80)
         self.all_processes_tree.column("Nome", width=250)
@@ -510,6 +518,8 @@ class GerenciadorFirebirdApp(tk.Tk):
         v_scrollbar.pack(side="right", fill="y")
         h_scrollbar.pack(side="bottom", fill="x")
         
+        self.sort_order = {}
+        
         # Status dos processos
         self.process_status_label = ttk.Label(main_frame, text="🔄 Carregando processos...")
         self.process_status_label.pack(anchor="w", padx=10, pady=2)
@@ -519,16 +529,15 @@ class GerenciadorFirebirdApp(tk.Tk):
         action_frame.pack(fill="x", padx=5, pady=10)
         
         ttk.Button(action_frame, 
-                  text="🔥 Finalizar Selecionados",
-                  command=self._kill_selected_processes,
-                  cursor="hand2").pack(side="left", padx=5)
+                text="🔥 Finalizar Selecionados",
+                command=self._kill_selected_processes,
+                cursor="hand2").pack(side="left", padx=5)
         
         ttk.Button(action_frame,
-                  text="🎯 Finalizar por PID",
-                  command=self._kill_by_pid,
-                  cursor="hand2").pack(side="left", padx=5)
+                text="🎯 Finalizar por PID",
+                command=self._kill_by_pid,
+                cursor="hand2").pack(side="left", padx=5)
 
-        # Configura pesquisa com debounce
         self.search_job = None
         def on_search_change(*args):
             if self.search_job:
@@ -540,6 +549,119 @@ class GerenciadorFirebirdApp(tk.Tk):
         # Atalhos de teclado
         self.all_processes_tree.bind("<Delete>", lambda e: self._kill_selected_processes())
         self.all_processes_tree.bind("<F5>", lambda e: self._refresh_all_processes())
+
+    def _sort_treeview(self, column):
+        """Ordena o treeview pela coluna clicada"""
+        try:
+            current_reverse = self.sort_order.get(column, False)
+            
+            items = [(self.all_processes_tree.set(item, column), item) for item in self.all_processes_tree.get_children('')]
+            
+            if column == "PID":
+                try:
+                    items.sort(key=lambda x: int(x[0]) if x[0].isdigit() else float('inf'), reverse=current_reverse)
+                except:
+                    items.sort(key=lambda x: x[0], reverse=current_reverse)
+            else:
+                items.sort(key=lambda x: x[0].lower() if x[0] else "", reverse=current_reverse)
+            
+            # Reorganiza os itens na nova ordem
+            for index, (_, item) in enumerate(items):
+                self.all_processes_tree.move(item, '', index)
+            
+            new_reverse = not current_reverse
+            self.sort_order[column] = new_reverse
+
+            self._update_column_heading(column, new_reverse)
+            
+        except Exception as e:
+            self.log(f"❌ Erro ao ordenar coluna {column}: {e}", "error")
+
+    def _update_column_heading(self, column, reverse):
+        """Atualiza o cabeçalho"""
+        for col in ["PID", "Nome", "Usuário", "Status"]:
+            current_text = self.all_processes_tree.heading(col, "text")
+
+            clean_text = current_text.replace(" ▲", "").replace(" ▼", "")
+            self.all_processes_tree.heading(col, text=clean_text)
+
+        base_text = ""
+        if column == "PID":
+            base_text = "PID"
+        elif column == "Nome":
+            base_text = "Nome do Processo"
+        elif column == "Usuário":
+            base_text = "Usuário"
+        elif column == "Status":
+            base_text = "Status"
+        
+        arrow = " ▼" if reverse else " ▲"
+        self.all_processes_tree.heading(column, text=base_text + arrow)
+
+    def _refresh_all_processes(self):
+        """Atualiza lista de todos os processos do sistema"""
+        try:
+            selected_items = self.all_processes_tree.selection()
+            selected_pids = [self.all_processes_tree.item(item, "values")[0] for item in selected_items]
+
+            for item in self.all_processes_tree.get_children():
+                self.all_processes_tree.delete(item)
+            
+            search_term = self.search_var.get().lower()
+            
+            process_count = 0
+            all_processes = []
+            
+            for proc in psutil.process_iter(['pid', 'name', 'username', 'status']):
+                try:
+                    proc_info = proc.info
+                    proc_name = proc_info['name'] or ''
+                    proc_user = proc_info['username'] or ''
+                    proc_status = proc_info['status'] or 'Unknown'
+                    
+                    if search_term and search_term not in proc_name.lower():
+                        continue
+                    
+                    all_processes.append((
+                        str(proc_info['pid']),
+                        proc_name,
+                        proc_user,
+                        proc_status
+                    ))
+                    process_count += 1
+                    
+                except (psutil.NoSuchProcess, psutil.AccessDenied):
+                    continue
+            
+            sorted_column = None
+            reverse_order = False
+            
+            for column, is_reverse in self.sort_order.items():
+                if is_reverse is not None:
+                    sorted_column = column
+                    reverse_order = is_reverse
+                    break
+            
+            if sorted_column:
+                if sorted_column == "PID":
+                    all_processes.sort(key=lambda x: int(x[0]) if x[0].isdigit() else float('inf'), reverse=reverse_order)
+                elif sorted_column == "Nome":
+                    all_processes.sort(key=lambda x: x[1].lower(), reverse=reverse_order)
+                elif sorted_column == "Usuário":
+                    all_processes.sort(key=lambda x: x[2].lower(), reverse=reverse_order)
+                elif sorted_column == "Status":
+                    all_processes.sort(key=lambda x: x[3].lower(), reverse=reverse_order)
+            
+            for process_data in all_processes:
+                item = self.all_processes_tree.insert("", "end", values=process_data)
+                
+                if process_data[0] in selected_pids:
+                    self.all_processes_tree.selection_add(item)
+            
+            self.process_status_label.config(text=f"✅ {process_count} processos encontrados")
+            
+        except Exception as e:
+            self.process_status_label.config(text=f"❌ Erro ao carregar processos: {e}")
 
     def _create_scheduler_tab(self):
         """Cria aba de agendamento"""
