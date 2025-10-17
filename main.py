@@ -62,6 +62,7 @@ CONFIG_PATH = BASE_DIR / "config.json"
 LOG_FILE = BASE_DIR / "gerenciador_firebird.log"
 DEFAULT_BACKUP_DIR = BASE_DIR / "backups"
 DEFAULT_KEEP_BACKUPS = 5
+REPORTS_DIR = BASE_DIR / "Relatórios"
 
 # Opções disponíveis de pageSize
 PAGE_SIZE_OPTIONS = [
@@ -100,13 +101,14 @@ def load_config():
     default = {
         "gbak_path": "",
         "gfix_path": "",
+        "gstat_path": "",
         "backup_dir": str(DEFAULT_BACKUP_DIR),
         "keep_backups": DEFAULT_KEEP_BACKUPS,
         "firebird_user": "SYSDBA",
         "firebird_password": "masterkey",
         "firebird_host": "localhost",
-        "firebird_port": "26350",  # Porta padrão
-        "page_size": "8192",  # PageSize padrão
+        "firebird_port": "26350",
+        "page_size": "8192",
         "auto_monitor": True,
         "monitor_interval": 30,
         "minimize_to_tray": True,
@@ -201,7 +203,7 @@ def kill_firebird_processes():
     """Mata processos do Firebird de forma segura"""
     firebird_processes = [
         "fb_inet_server.exe", "fbserver.exe", "fbguard.exe", 
-        "firebird.exe", "ibserver.exe", "gbak.exe", "gfix.exe"
+        "firebird.exe", "ibserver.exe", "gbak.exe", "gfix.exe", "gstat.exe"
     ]
     
     killed_count = 0
@@ -439,45 +441,227 @@ class GerenciadorFirebirdApp(tk.Tk):
         monitor_frame = ttk.Frame(self.notebook)
         self.notebook.add(monitor_frame, text="Monitor")
         
+        # Frame superior com informações do sistema
+        top_frame = ttk.Frame(monitor_frame)
+        top_frame.pack(fill="x", padx=10, pady=5)
+        
         # Status do servidor
-        server_frame = ttk.LabelFrame(monitor_frame, text="Status do Servidor", padding=10)
-        server_frame.pack(fill="x", padx=10, pady=5)
+        server_frame = ttk.LabelFrame(top_frame, text="Status do Servidor Firebird", padding=10)
+        server_frame.pack(side="left", fill="x", expand=True, padx=5)
         
         self.server_status = ttk.Label(server_frame, text="🔄 Verificando status...")
         self.server_status.pack(anchor="w")
         
         # Espaço em disco
-        disk_frame = ttk.LabelFrame(monitor_frame, text="Espaço em Disco", padding=10)
-        disk_frame.pack(fill="x", padx=10, pady=5)
+        disk_frame = ttk.LabelFrame(top_frame, text="Espaço em Disco", padding=10)
+        disk_frame.pack(side="left", fill="x", expand=True, padx=5)
         
         self.disk_status = ttk.Label(disk_frame, text="🔄 Calculando espaço...")
         self.disk_status.pack(anchor="w")
         
-        # Processos
-        processes_frame = ttk.LabelFrame(monitor_frame, text="Processos do Firebird", padding=10)
-        processes_frame.pack(fill="both", expand=True, padx=10, pady=5)
+        # Frame principal - Gerenciador de Processos
+        main_frame = ttk.Frame(monitor_frame)
+        main_frame.pack(fill="both", expand=True, padx=10, pady=5)
         
-        # Treeview para processos
-        self.processes_tree = ttk.Treeview(processes_frame, columns=("PID", "Nome", "Status"), show="headings")
-        self.processes_tree.heading("PID", text="PID")
-        self.processes_tree.heading("Nome", text="Nome do Processo")
-        self.processes_tree.heading("Status", text="Status")
-        self.processes_tree.column("PID", width=80)
-        self.processes_tree.column("Nome", width=200)
-        self.processes_tree.column("Status", width=100)
+        # Frame de pesquisa
+        search_frame = ttk.LabelFrame(main_frame, text="Pesquisar Processos", padding=10)
+        search_frame.pack(fill="x", padx=5, pady=5)
         
-        scrollbar = ttk.Scrollbar(processes_frame, orient="vertical", command=self.processes_tree.yview)
-        self.processes_tree.configure(yscrollcommand=scrollbar.set)
+        ttk.Label(search_frame, text="Pesquisar:").pack(side="left", padx=5)
+        self.search_var = tk.StringVar()
+        search_entry = ttk.Entry(search_frame, textvariable=self.search_var, width=40)
+        search_entry.pack(side="left", padx=5)
         
-        self.processes_tree.pack(side="left", fill="both", expand=True)
-        scrollbar.pack(side="right", fill="y")
+        # Botões de pesquisa
+        search_btn_frame = ttk.Frame(search_frame)
+        search_btn_frame.pack(side="left", padx=10)
         
-        # Botões de controle
-        control_frame = ttk.Frame(monitor_frame)
-        control_frame.pack(fill="x", padx=10, pady=5)
+        ttk.Button(search_btn_frame, text="🔍 Pesquisar", 
+                cursor="hand2", command=self._refresh_all_processes).pack(side="left", padx=2)
+        ttk.Button(search_btn_frame, text="🔄 Atualizar Tudo",
+                cursor="hand2", command=self._refresh_all_processes).pack(side="left", padx=2)
         
-        ttk.Button(control_frame, text="🔄 Atualizar",cursor="hand2", command=self.refresh_monitor).pack(side="left", padx=5)
-        ttk.Button(control_frame, text="📊 Relatório de Sistema", cursor="hand2", command=self.generate_system_report).pack(side="left", padx=5)
+        # Lista de todos os processos
+        all_processes_frame = ttk.LabelFrame(main_frame, text="Todos os Processos do Sistema", padding=10)
+        all_processes_frame.pack(fill="both", expand=True, padx=5, pady=5)
+        
+        # Treeview para todos os processos
+        self.all_processes_tree = ttk.Treeview(all_processes_frame, 
+                                            columns=("PID", "Nome", "Usuário", "Status"), 
+                                            show="headings",
+                                            selectmode="extended")
+        
+        # Configurar os cabeçalhos com função de ordenação
+        self.all_processes_tree.heading("PID", text="PID", command=lambda: self._sort_treeview("PID"))
+        self.all_processes_tree.heading("Nome", text="Nome do Processo", command=lambda: self._sort_treeview("Nome"))
+        self.all_processes_tree.heading("Usuário", text="Usuário", command=lambda: self._sort_treeview("Usuário"))
+        self.all_processes_tree.heading("Status", text="Status", command=lambda: self._sort_treeview("Status"))
+
+        self.sort_order = {
+            "PID": False,
+            "Nome": False, 
+            "Usuário": False,
+            "Status": False
+        }
+        
+        self.all_processes_tree.column("PID", width=80)
+        self.all_processes_tree.column("Nome", width=250)
+        self.all_processes_tree.column("Usuário", width=150)
+        self.all_processes_tree.column("Status", width=100)
+        
+        # Scrollbars
+        v_scrollbar = ttk.Scrollbar(all_processes_frame, orient="vertical", command=self.all_processes_tree.yview)
+        h_scrollbar = ttk.Scrollbar(all_processes_frame, orient="horizontal", command=self.all_processes_tree.xview)
+        self.all_processes_tree.configure(yscrollcommand=v_scrollbar.set, xscrollcommand=h_scrollbar.set)
+        
+        self.all_processes_tree.pack(side="left", fill="both", expand=True)
+        v_scrollbar.pack(side="right", fill="y")
+        h_scrollbar.pack(side="bottom", fill="x")
+        
+        self.sort_order = {}
+        
+        # Status dos processos
+        self.process_status_label = ttk.Label(main_frame, text="🔄 Carregando processos...")
+        self.process_status_label.pack(anchor="w", padx=10, pady=2)
+        
+        # Botões de ação
+        action_frame = ttk.Frame(main_frame)
+        action_frame.pack(fill="x", padx=5, pady=10)
+        
+        ttk.Button(action_frame, 
+                text="🔥 Finalizar Selecionados",
+                command=self._kill_selected_processes,
+                cursor="hand2").pack(side="left", padx=5)
+        
+        ttk.Button(action_frame,
+                text="🎯 Finalizar por PID",
+                command=self._kill_by_pid,
+                cursor="hand2").pack(side="left", padx=5)
+
+        self.search_job = None
+        def on_search_change(*args):
+            if self.search_job:
+                self.after_cancel(self.search_job)
+            self.search_job = self.after(500, self._refresh_all_processes)
+        
+        self.search_var.trace("w", on_search_change)
+        
+        # Atalhos de teclado
+        self.all_processes_tree.bind("<Delete>", lambda e: self._kill_selected_processes())
+        self.all_processes_tree.bind("<F5>", lambda e: self._refresh_all_processes())
+
+    def _sort_treeview(self, column):
+        """Ordena o treeview pela coluna clicada"""
+        try:
+            current_reverse = self.sort_order.get(column, False)
+            
+            items = [(self.all_processes_tree.set(item, column), item) for item in self.all_processes_tree.get_children('')]
+            
+            if column == "PID":
+                try:
+                    items.sort(key=lambda x: int(x[0]) if x[0].isdigit() else float('inf'), reverse=current_reverse)
+                except:
+                    items.sort(key=lambda x: x[0], reverse=current_reverse)
+            else:
+                items.sort(key=lambda x: x[0].lower() if x[0] else "", reverse=current_reverse)
+            
+            # Reorganiza os itens na nova ordem
+            for index, (_, item) in enumerate(items):
+                self.all_processes_tree.move(item, '', index)
+            
+            new_reverse = not current_reverse
+            self.sort_order[column] = new_reverse
+
+            self._update_column_heading(column, new_reverse)
+            
+        except Exception as e:
+            self.log(f"❌ Erro ao ordenar coluna {column}: {e}", "error")
+
+    def _update_column_heading(self, column, reverse):
+        """Atualiza o cabeçalho"""
+        for col in ["PID", "Nome", "Usuário", "Status"]:
+            current_text = self.all_processes_tree.heading(col, "text")
+
+            clean_text = current_text.replace(" ▲", "").replace(" ▼", "")
+            self.all_processes_tree.heading(col, text=clean_text)
+
+        base_text = ""
+        if column == "PID":
+            base_text = "PID"
+        elif column == "Nome":
+            base_text = "Nome do Processo"
+        elif column == "Usuário":
+            base_text = "Usuário"
+        elif column == "Status":
+            base_text = "Status"
+        
+        arrow = " ▼" if reverse else " ▲"
+        self.all_processes_tree.heading(column, text=base_text + arrow)
+
+    def _refresh_all_processes(self):
+        """Atualiza lista de todos os processos do sistema"""
+        try:
+            selected_items = self.all_processes_tree.selection()
+            selected_pids = [self.all_processes_tree.item(item, "values")[0] for item in selected_items]
+
+            for item in self.all_processes_tree.get_children():
+                self.all_processes_tree.delete(item)
+            
+            search_term = self.search_var.get().lower()
+            
+            process_count = 0
+            all_processes = []
+            
+            for proc in psutil.process_iter(['pid', 'name', 'username', 'status']):
+                try:
+                    proc_info = proc.info
+                    proc_name = proc_info['name'] or ''
+                    proc_user = proc_info['username'] or ''
+                    proc_status = proc_info['status'] or 'Unknown'
+                    
+                    if search_term and search_term not in proc_name.lower():
+                        continue
+                    
+                    all_processes.append((
+                        str(proc_info['pid']),
+                        proc_name,
+                        proc_user,
+                        proc_status
+                    ))
+                    process_count += 1
+                    
+                except (psutil.NoSuchProcess, psutil.AccessDenied):
+                    continue
+            
+            sorted_column = None
+            reverse_order = False
+            
+            for column, is_reverse in self.sort_order.items():
+                if is_reverse is not None:
+                    sorted_column = column
+                    reverse_order = is_reverse
+                    break
+            
+            if sorted_column:
+                if sorted_column == "PID":
+                    all_processes.sort(key=lambda x: int(x[0]) if x[0].isdigit() else float('inf'), reverse=reverse_order)
+                elif sorted_column == "Nome":
+                    all_processes.sort(key=lambda x: x[1].lower(), reverse=reverse_order)
+                elif sorted_column == "Usuário":
+                    all_processes.sort(key=lambda x: x[2].lower(), reverse=reverse_order)
+                elif sorted_column == "Status":
+                    all_processes.sort(key=lambda x: x[3].lower(), reverse=reverse_order)
+            
+            for process_data in all_processes:
+                item = self.all_processes_tree.insert("", "end", values=process_data)
+                
+                if process_data[0] in selected_pids:
+                    self.all_processes_tree.selection_add(item)
+            
+            self.process_status_label.config(text=f"✅ {process_count} processos encontrados")
+            
+        except Exception as e:
+            self.process_status_label.config(text=f"❌ Erro ao carregar processos: {e}")
 
     def _create_scheduler_tab(self):
         """Cria aba de agendamento"""
@@ -609,36 +793,26 @@ class GerenciadorFirebirdApp(tk.Tk):
         )
         migrate_btn.grid(row=1, column=1, padx=10, pady=10, sticky="ew")
         
-        # Relatório
+        # Relatório do Sistema
         report_btn = ttk.Button(
             tools_grid, 
-            text="📊 Gerar Relatório",
+            text="📊 Relatório Sistema",
             cursor="hand2", 
             command=self.generate_system_report,
             width=20
         )
         report_btn.grid(row=2, column=0, padx=10, pady=10, sticky="ew")
         
-        # Verificar espaço
-        space_btn = ttk.Button(
+        # Relatório do Banco (gstat)
+        gstat_report_btn = ttk.Button(
             tools_grid, 
-            text="💾 Verificar Espaço",
+            text="📈 Relatório Banco",
             cursor="hand2", 
-            command=self.check_disk_space,
+            command=self.generate_gstat_report,
             width=20
         )
-        space_btn.grid(row=2, column=1, padx=10, pady=10, sticky="ew")
+        gstat_report_btn.grid(row=2, column=1, padx=10, pady=10, sticky="ew")
         
-        # Importar configurações
-        import_btn = ttk.Button(
-            tools_grid, 
-            text="📥 Importar Config",
-            cursor="hand2", 
-            command=self.import_config,
-            width=20
-        )
-        import_btn.grid(row=3, column=0, padx=10, pady=10, sticky="ew")
-
         # Exportar configurações
         export_btn = ttk.Button(
             tools_grid, 
@@ -647,7 +821,27 @@ class GerenciadorFirebirdApp(tk.Tk):
             command=self.export_config,
             width=20
         )
-        export_btn.grid(row=3, column=1, padx=10, pady=10, sticky="ew")
+        export_btn.grid(row=3, column=0, padx=10, pady=10, sticky="ew")
+
+        # Importar configurações
+        import_btn = ttk.Button(
+            tools_grid, 
+            text="📥 Importar Config",
+            cursor="hand2", 
+            command=self.import_config,
+            width=20
+        )
+        import_btn.grid(row=3, column=1, padx=10, pady=10, sticky="ew")
+
+        # Verificar espaço
+        space_btn = ttk.Button(
+            tools_grid, 
+            text="💾 Verificar Espaço",
+            cursor="hand2", 
+            command=self.check_disk_space,
+            width=20
+        )
+        space_btn.grid(row=4, column=0, padx=10, pady=10, sticky="ew")
         
         # Configurar colunas
         tools_grid.columnconfigure(0, weight=1)
@@ -700,7 +894,6 @@ class GerenciadorFirebirdApp(tk.Tk):
                         image = Image.open(icon_path)
                         # Redimensiona para tamanho padrão da bandeja
                         image = image.resize((32, 32), Image.Resampling.LANCZOS)
-                        self.log(f"📌 Ícone da bandeja carregado: {icon_path}", "info")
                         break
                     except Exception as e:
                         continue
@@ -712,7 +905,6 @@ class GerenciadorFirebirdApp(tk.Tk):
                 draw = ImageDraw.Draw(image)
                 
                 draw.text((10, 6), "F", fill="white", font=None)
-                self.log("📌 Usando ícone padrão da bandeja", "info")
             
             # Menu do ícone
             menu = pystray.Menu(
@@ -733,7 +925,6 @@ class GerenciadorFirebirdApp(tk.Tk):
             tray_thread = threading.Thread(target=run_tray, daemon=True)
             tray_thread.start()
             
-            self.log("📌 Ícone da bandeja criado", "info")
             
         except ImportError:
             self.log("⚠️ Biblioteca pystray não encontrada. Instale com: pip install pystray pillow", "warning")
@@ -744,7 +935,6 @@ class GerenciadorFirebirdApp(tk.Tk):
         if self.conf.get("minimize_to_tray", True):
             self.withdraw()
             self.create_tray_icon()
-            self.log("📌 Programa minimizado para bandeja do sistema", "info")
         else:
             self.iconify()
 
@@ -758,7 +948,6 @@ class GerenciadorFirebirdApp(tk.Tk):
         self.state('normal')
         self.lift()
         self.focus_force()
-        self.log("🔄 Programa restaurado da bandeja", "info")
 
     def quit_application(self, icon=None, item=None):
         """Fecha o aplicativo completamente"""
@@ -1988,7 +2177,7 @@ class GerenciadorFirebirdApp(tk.Tk):
         threading.Thread(target=kill_processes, daemon=True).start()
 
     def _on_kill_complete(self, success):
-        """Callback após finalizar processos"""
+        """Callback após finalizar processos do Firebird"""
         if success:
             self.set_status("✅ Processos do Firebird finalizados!", "green")
             self.log("✅ Todos os processos do Firebird foram finalizados com sucesso.", "success")
@@ -1996,9 +2185,9 @@ class GerenciadorFirebirdApp(tk.Tk):
             self.set_status("ℹ️ Nenhum processo do Firebird encontrado ou erro ao finalizar.", "blue")
             self.log("ℹ️ Nenhum processo do Firebird em execução ou erro ao finalizar.", "info")
 
-    # ---------- MONITORAMENTO ----------
+    # ---------- GERENCIAMENTO DE PROCESSOS ----------
     def refresh_monitor(self):
-        """Atualiza informações do monitor"""
+        """Atualiza informações"""
         try:
             # Atualiza status do servidor
             self._update_server_status()
@@ -2007,7 +2196,7 @@ class GerenciadorFirebirdApp(tk.Tk):
             self._update_disk_space()
             
             # Atualiza lista de processos
-            self._update_processes_list()
+            self._refresh_all_processes()
             
         except Exception as e:
             self.log(f"❌ Erro ao atualizar monitor: {e}", "error")
@@ -2015,7 +2204,6 @@ class GerenciadorFirebirdApp(tk.Tk):
     def _update_server_status(self):
         """Atualiza status do servidor Firebird"""
         try:
-            # Verifica se o serviço está rodando
             firebird_processes = []
             for proc in psutil.process_iter(['name']):
                 if proc.info['name'] and any(fb in proc.info['name'].lower() 
@@ -2057,33 +2245,150 @@ class GerenciadorFirebirdApp(tk.Tk):
         except Exception as e:
             self.disk_status.config(text=f"❌ Erro: {str(e)}")
 
-    def _update_processes_list(self):
-        """Atualiza lista de processos do Firebird"""
+    def _refresh_all_processes(self):
+        """Atualiza lista de todos os processos do sistema"""
         try:
-            # Limpa lista atual
-            for item in self.processes_tree.get_children():
-                self.processes_tree.delete(item)
+            for item in self.all_processes_tree.get_children():
+                self.all_processes_tree.delete(item)
             
-            # Adiciona processos
-            firebird_processes = [
-                "fb_inet_server.exe", "fbserver.exe", "fbguard.exe", 
-                "firebird.exe", "ibserver.exe", "gbak.exe", "gfix.exe"
-            ]
+            search_term = self.search_var.get().lower()
             
-            for proc in psutil.process_iter(['pid', 'name', 'status']):
+            process_count = 0
+            for proc in psutil.process_iter(['pid', 'name', 'username', 'status']):
                 try:
-                    proc_name = proc.info['name'].lower() if proc.info['name'] else ''
-                    if any(fb_proc in proc_name for fb_proc in [p.lower() for p in firebird_processes]):
-                        self.processes_tree.insert("", "end", values=(
-                            proc.info['pid'],
-                            proc.info['name'],
-                            proc.info['status']
-                        ))
+                    proc_info = proc.info
+                    proc_name = proc_info['name'] or ''
+                    proc_user = proc_info['username'] or ''
+                    
+                    if search_term and search_term not in proc_name.lower():
+                        continue
+                    
+                    self.all_processes_tree.insert("", "end", values=(
+                        proc_info['pid'],
+                        proc_name,
+                        proc_user,
+                        proc_info['status']
+                    ))
+                    process_count += 1
+                    
                 except (psutil.NoSuchProcess, psutil.AccessDenied):
                     continue
-                    
+            
+            self.process_status_label.config(text=f"✅ {process_count} processos encontrados")
+            
         except Exception as e:
-            self.log(f"❌ Erro ao atualizar processos: {e}", "error")
+            self.process_status_label.config(text=f"❌ Erro ao carregar processos: {e}")
+
+    def _kill_selected_processes(self):
+        """Finaliza processos selecionados"""
+        selection = self.all_processes_tree.selection()
+        if not selection:
+            messagebox.showwarning("Aviso", "Selecione pelo menos um processo para finalizar.")
+            return
+        
+        # Confirmação
+        selected_count = len(selection)
+        if not messagebox.askyesno(
+            "Confirmação",
+            f"🚨 ATENÇÃO 🚨\n\n"
+            f"Você está prestes a finalizar {selected_count} processo(s).\n\n"
+            f"Esta operação pode causar:\n"
+            f"• Perda de dados não salvos\n"
+            f"• Instabilidade do sistema\n"
+            f"• Falha em aplicativos\n\n"
+            f"Tem certeza que deseja continuar?",
+            icon=messagebox.WARNING
+        ):
+            return
+        
+        killed_count = 0
+        failed_count = 0
+        failed_list = []
+        
+        for item in selection:
+            values = self.all_processes_tree.item(item, "values")
+            pid = int(values[0])
+            proc_name = values[1]
+            
+            try:
+                process = psutil.Process(pid)
+                
+                try:
+                    process.terminate()
+                    process.wait(timeout=3)
+                    killed_count += 1
+                    self.log(f"✅ Processo finalizado: {proc_name} (PID: {pid})", "success")
+                    
+                except (psutil.NoSuchProcess, psutil.TimeoutExpired):
+                    try:
+                        process.kill()
+                        process.wait(timeout=2)
+                        killed_count += 1
+                        self.log(f"✅ Processo forçado: {proc_name} (PID: {pid})", "warning")
+                    except:
+                        failed_count += 1
+                        failed_list.append(f"{proc_name} (PID: {pid})")
+                        self.log(f"❌ Falha ao finalizar: {proc_name} (PID: {pid})", "error")
+                        
+            except Exception as e:
+                failed_count += 1
+                failed_list.append(f"{proc_name} (PID: {pid})")
+                self.log(f"❌ Erro ao finalizar {proc_name} (PID: {pid}): {e}", "error")
+        
+        result_msg = f"✅ {killed_count} processo(s) finalizado(s) com sucesso!"
+        if failed_count > 0:
+            result_msg += f"\n❌ {failed_count} processo(s) falharam:\n" + "\n".join(failed_list)
+        
+        messagebox.showinfo("Resultado", result_msg)
+        
+        self.after(1000, self._refresh_all_processes)
+        
+        # Log
+        self.log(f"🔚 Finalização concluída: {killed_count} sucesso(s), {failed_count} falha(s)", 
+                "success" if failed_count == 0 else "warning")
+
+    def _kill_by_pid(self):
+        """Finaliza processo por PID específico"""
+        pid = simpledialog.askinteger("Finalizar por PID", "Digite o PID do processo:")
+        if pid is None:
+            return
+        
+        try:
+            process = psutil.Process(pid)
+            proc_name = process.name()
+            
+            if not messagebox.askyesno(
+                "Confirmação",
+                f"Finalizar processo?\n\n"
+                f"PID: {pid}\n"
+                f"Nome: {proc_name}\n\n"
+                f"Tem certeza?",
+                icon=messagebox.WARNING
+            ):
+                return
+            
+            try:
+                process.terminate()
+                process.wait(timeout=3)
+                self.log(f"✅ Processo finalizado: {proc_name} (PID: {pid})", "success")
+                messagebox.showinfo("Sucesso", f"Processo {proc_name} (PID: {pid}) finalizado!")
+            except:
+                try:
+                    process.kill()
+                    process.wait(timeout=2)
+                    self.log(f"✅ Processo forçado: {proc_name} (PID: {pid})", "warning")
+                    messagebox.showinfo("Sucesso", f"Processo {proc_name} (PID: {pid}) forçado!")
+                except Exception as e:
+                    self.log(f"❌ Falha ao finalizar {proc_name} (PID: {pid}): {e}", "error")
+                    messagebox.showerror("Erro", f"Falha ao finalizar processo {pid}:\n{e}")
+            
+            # Atualiza lista
+            self.after(1000, self._refresh_all_processes)
+            
+        except psutil.NoSuchProcess:
+            messagebox.showerror("Erro", f"Processo com PID {pid} não encontrado.")
+        except Exception as e:
+            messagebox.showerror("Erro", f"Erro ao acessar processo {pid}:\n{e}")
 
     def auto_refresh_monitor(self):
         """Atualização automática do monitor"""
@@ -2341,19 +2646,111 @@ class GerenciadorFirebirdApp(tk.Tk):
         
         self.run_command(backup_cmd, after_backup)
 
+    # ---------- RELATÓRIOS ----------
+    def generate_gstat_report(self):
+        """Gera relatório detalhado do banco usando gstat.exe"""
+        gstat = self.conf.get("gstat_path") or find_executable("gstat.exe")
+        if not gstat:
+            messagebox.showerror("Erro", "gstat.exe não encontrado. Configure o caminho nas configurações.")
+            return
+        
+        self.conf["gstat_path"] = gstat
+        save_config(self.conf)
+
+        db = filedialog.askopenfilename(
+            title="Selecione o banco para análise",
+            filetypes=[("Firebird Database", "*.fdb"), ("Todos os arquivos", "*.*")]
+        )
+        if not db:
+            return
+
+        # Cria pasta de relatórios se não existir
+        REPORTS_DIR.mkdir(exist_ok=True)
+        
+        timestamp = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
+        db_name = Path(db).stem
+        report_filename = f"relatorio_gstat_{db_name}_{timestamp}.txt"
+        report_path = REPORTS_DIR / report_filename
+
+        self.log(f"📈 Iniciando análise do banco com gstat: {db}", "info")
+        self.set_status("Gerando relatório do banco...", "blue")
+
+        # Comando gstat
+        cmd = [
+            gstat, "-h",
+            db,
+            "-user", self.conf.get("firebird_user", "SYSDBA"),
+            "-pass", self.conf.get("firebird_password", "masterkey")
+        ]
+
+        def after_gstat():
+            self.set_status("✅ Relatório gstat gerado", "green")
+            self.log(f"✅ Relatório gstat salvo: {report_path}", "success")
+            messagebox.showinfo(
+                "Relatório Gerado",
+                f"Relatório do banco gerado com sucesso!\n\n"
+                f"Arquivo: {report_path}\n\n"
+                f"O relatório contém informações detalhadas sobre:\n"
+                f"• Estrutura do banco\n• Tabelas e índices\n• Estatísticas de uso"
+            )
+
+        def run_gstat_with_output():
+            try:
+                CREATE_NO_WINDOW = 0x08000000 if sys.platform == "win32" else 0
+
+                process = subprocess.Popen(
+                    cmd,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                    encoding="utf-8",
+                    errors='replace',
+                    creationflags=CREATE_NO_WINDOW
+                )
+
+                output_lines = []
+                for line in iter(process.stdout.readline, ''):
+                    if line.strip():
+                        output_lines.append(line.strip())
+                        self.log(line.strip(), "info")
+
+                process.stdout.close()
+                return_code = process.wait()
+
+                # Salva o relatório em arquivo
+                with open(report_path, 'w', encoding='utf-8') as f:
+                    f.write(f"Relatório GSTAT - {db_name}\n")
+                    f.write(f"Gerado em: {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}\n")
+                    f.write("=" * 50 + "\n\n")
+                    f.write("\n".join(output_lines))
+
+                if return_code == 0:
+                    self.after(0, after_gstat)
+                else:
+                    self.after(0, lambda: self.log(f"❌ Gstat retornou código de erro: {return_code}", "error"))
+
+            except Exception as e:
+                self.after(0, lambda: self.log(f"❌ Erro ao executar gstat: {e}", "error"))
+
+        threading.Thread(target=run_gstat_with_output, daemon=True).start()
+
     def generate_system_report(self):
         """Gera relatório detalhado do sistema"""
         try:
+            # Cria pasta de relatórios se não existir
+            REPORTS_DIR.mkdir(exist_ok=True)
+            
             report = []
-            report.append("=" * 50)
+            report.append("=" * 60)
             report.append("RELATÓRIO DO SISTEMA GERENCIADOR FIREBIRD")
             report.append(f"Gerado em: {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}")
-            report.append("=" * 50)
+            report.append("=" * 60)
             
             # Informações do sistema
             report.append("\n📊 INFORMAÇÕES DO SISTEMA:")
             report.append(f"- Diretório base: {BASE_DIR}")
             report.append(f"- Diretório de backups: {self.conf.get('backup_dir', 'Não definido')}")
+            report.append(f"- Diretório de relatórios: {REPORTS_DIR}")
             
             # Configurações Firebird
             report.append(f"\n🔥 CONFIGURAÇÕES FIREBIRD:")
@@ -2361,6 +2758,9 @@ class GerenciadorFirebirdApp(tk.Tk):
             report.append(f"- Porta: {self.conf.get('firebird_port', '26350')}")
             report.append(f"- Usuário: {self.conf.get('firebird_user', 'SYSDBA')}")
             report.append(f"- PageSize: {self.conf.get('page_size', '8192')}")
+            report.append(f"- Gbak: {self.conf.get('gbak_path', 'Não configurado')}")
+            report.append(f"- Gfix: {self.conf.get('gfix_path', 'Não configurado')}")
+            report.append(f"- Gstat: {self.conf.get('gstat_path', 'Não configurado')}")
             
             # Espaço em disco
             backup_dir = Path(self.conf.get("backup_dir", DEFAULT_BACKUP_DIR))
@@ -2397,11 +2797,12 @@ class GerenciadorFirebirdApp(tk.Tk):
             report.append(f"\n🪟 INICIALIZAÇÃO COM WINDOWS: {startup_status}")
             
             # Salva relatório
-            report_path = BASE_DIR / f"relatorio_sistema_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            report_path = REPORTS_DIR / f"relatorio_sistema_{timestamp}.txt"
             with open(report_path, 'w', encoding='utf-8') as f:
                 f.write('\n'.join(report))
             
-            self.log(f"📊 Relatório gerado: {report_path}", "success")
+            self.log(f"📊 Relatório do sistema gerado: {report_path}", "success")
             messagebox.showinfo("Relatório", f"Relatório salvo em:\n{report_path}")
             
         except Exception as e:
@@ -2410,7 +2811,7 @@ class GerenciadorFirebirdApp(tk.Tk):
     def _get_firebird_processes(self):
         """Retorna lista de processos do Firebird"""
         processes = []
-        firebird_procs = ["fb_inet_server.exe", "fbserver.exe", "fbguard.exe", "firebird.exe", "ibserver.exe"]
+        firebird_procs = ["fb_inet_server.exe", "fbserver.exe", "fbguard.exe", "firebird.exe", "ibserver.exe", "gbak.exe", "gfix.exe", "gstat.exe"]
         
         for proc in psutil.process_iter(['pid', 'name']):
             if proc.info['name'] and any(fb in proc.info['name'].lower() for fb in [p.lower() for p in firebird_procs]):
@@ -2470,7 +2871,7 @@ class GerenciadorFirebirdApp(tk.Tk):
                 with open(config_file, 'r', encoding='utf-8') as f:
                     new_conf = json.load(f)
                 
-                keep_keys = ['backup_dir', 'gbak_path', 'gfix_path', 'firebird_host', 'firebird_port', 'page_size']
+                keep_keys = ['backup_dir', 'gbak_path', 'gfix_path', 'gstat_path', 'firebird_host', 'firebird_port', 'page_size']
                 for key in keep_keys:
                     if key in self.conf:
                         new_conf[key] = self.conf[key]
@@ -2532,39 +2933,47 @@ class GerenciadorFirebirdApp(tk.Tk):
         ttk.Button(firebird_frame, text="...", width=3,
                   command=lambda: self.pick_exe(gfix_var, "gfix.exe")).grid(row=1, column=2)
 
-        ttk.Label(firebird_frame, text="Pasta de backups:").grid(row=2, column=0, sticky="w", pady=8)
+        # Caminho do gstat.exe
+        ttk.Label(firebird_frame, text="Local do gstat.exe:").grid(row=2, column=0, sticky="w", pady=8)
+        gstat_var = tk.StringVar(value=self.conf.get("gstat_path", ""))
+        gstat_entry = ttk.Entry(firebird_frame, textvariable=gstat_var, width=40)
+        gstat_entry.grid(row=2, column=1, padx=5)
+        ttk.Button(firebird_frame, text="...", width=3,
+                  command=lambda: self.pick_exe(gstat_var, "gstat.exe")).grid(row=2, column=2)
+
+        ttk.Label(firebird_frame, text="Pasta de backups:").grid(row=3, column=0, sticky="w", pady=8)
         backup_var = tk.StringVar(value=self.conf.get("backup_dir", ""))
         backup_entry = ttk.Entry(firebird_frame, textvariable=backup_var, width=40)
-        backup_entry.grid(row=2, column=1, padx=5)
+        backup_entry.grid(row=3, column=1, padx=5)
         ttk.Button(firebird_frame, text="...", width=3,
-                  command=lambda: self.pick_dir(backup_var)).grid(row=2, column=2)
+                  command=lambda: self.pick_dir(backup_var)).grid(row=3, column=2)
 
-        ttk.Label(firebird_frame, text="Host do Firebird:").grid(row=3, column=0, sticky="w", pady=8)
+        ttk.Label(firebird_frame, text="Host do Firebird:").grid(row=4, column=0, sticky="w", pady=8)
         host_var = tk.StringVar(value=self.conf.get("firebird_host", "localhost"))
-        ttk.Entry(firebird_frame, textvariable=host_var, width=40).grid(row=3, column=1, padx=5)
+        ttk.Entry(firebird_frame, textvariable=host_var, width=40).grid(row=4, column=1, padx=5)
 
-        ttk.Label(firebird_frame, text="Porta do Firebird:").grid(row=4, column=0, sticky="w", pady=8)
+        ttk.Label(firebird_frame, text="Porta do Firebird:").grid(row=5, column=0, sticky="w", pady=8)
         port_var = tk.StringVar(value=self.conf.get("firebird_port", "26350"))
-        ttk.Entry(firebird_frame, textvariable=port_var, width=40).grid(row=4, column=1, padx=5)
+        ttk.Entry(firebird_frame, textvariable=port_var, width=40).grid(row=5, column=1, padx=5)
 
-        ttk.Label(firebird_frame, text="Usuário:").grid(row=5, column=0, sticky="w", pady=8)
+        ttk.Label(firebird_frame, text="Usuário:").grid(row=6, column=0, sticky="w", pady=8)
         user_var = tk.StringVar(value=self.conf.get("firebird_user", "SYSDBA"))
-        ttk.Entry(firebird_frame, textvariable=user_var, width=40).grid(row=5, column=1, padx=5)
+        ttk.Entry(firebird_frame, textvariable=user_var, width=40).grid(row=6, column=1, padx=5)
 
-        ttk.Label(firebird_frame, text="Senha:").grid(row=6, column=0, sticky="w", pady=8)
+        ttk.Label(firebird_frame, text="Senha:").grid(row=7, column=0, sticky="w", pady=8)
         pass_var = tk.StringVar(value=self.conf.get("firebird_password", "masterkey"))
-        ttk.Entry(firebird_frame, textvariable=pass_var, width=40, show="*").grid(row=6, column=1, padx=5)
+        ttk.Entry(firebird_frame, textvariable=pass_var, width=40, show="*").grid(row=7, column=1, padx=5)
 
-        ttk.Label(firebird_frame, text="PageSize:").grid(row=7, column=0, sticky="w", pady=8)
+        ttk.Label(firebird_frame, text="PageSize:").grid(row=8, column=0, sticky="w", pady=8)
         page_size_var = tk.StringVar(value=self.conf.get("page_size", "8192"))
         page_size_combo = ttk.Combobox(firebird_frame, textvariable=page_size_var, 
                                       values=PAGE_SIZE_OPTIONS, state="readonly", width=10)
-        page_size_combo.grid(row=7, column=1, sticky="w", padx=5)
-        ttk.Label(firebird_frame, text="(1KB, 2KB, 4KB, 8KB, 16KB)").grid(row=7, column=1, sticky="e", padx=5)
+        page_size_combo.grid(row=8, column=1, sticky="w", padx=5)
+        ttk.Label(firebird_frame, text="(1KB, 2KB, 4KB, 8KB, 16KB)").grid(row=8, column=1, sticky="e", padx=5)
 
-        ttk.Label(firebird_frame, text="Qtd. backups a manter:").grid(row=8, column=0, sticky="w", pady=8)
+        ttk.Label(firebird_frame, text="Qtd. backups a manter:").grid(row=9, column=0, sticky="w", pady=8)
         keep_var = tk.IntVar(value=self.conf.get("keep_backups", DEFAULT_KEEP_BACKUPS))
-        ttk.Spinbox(firebird_frame, from_=1, to=100, textvariable=keep_var, width=10).grid(row=8, column=1, sticky="w", padx=5)
+        ttk.Spinbox(firebird_frame, from_=1, to=100, textvariable=keep_var, width=10).grid(row=9, column=1, sticky="w", padx=5)
 
         # Aba Sistema
         system_frame = ttk.Frame(notebook, padding=10)
@@ -2602,6 +3011,7 @@ class GerenciadorFirebirdApp(tk.Tk):
             self.conf.update({
                 "gbak_path": gbak_var.get(),
                 "gfix_path": gfix_var.get(),
+                "gstat_path": gstat_var.get(),
                 "backup_dir": backup_var.get(),
                 "firebird_host": host_var.get(),
                 "firebird_port": port_var.get(),
