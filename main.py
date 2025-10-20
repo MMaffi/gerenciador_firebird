@@ -215,6 +215,20 @@ def get_disk_space(path):
         logging.error(f"Erro ao verificar espaço em disco: {e}")
         return None
 
+def open_file_with_default_app(file_path):
+    """Abre arquivo com programa padrão do sistema"""
+    try:
+        if os.name == 'nt':
+            os.startfile(file_path)
+        elif sys.platform == 'darwin':
+            subprocess.run(['open', file_path])
+        else:
+            subprocess.run(['xdg-open', file_path])
+        return True
+    except Exception as e:
+        logging.error(f"Erro ao abrir arquivo {file_path}: {e}")
+        return False
+
 # ------------ APP PRINCIPAL ------------
 class GerenciadorFirebirdApp(tk.Tk):
     def __init__(self):
@@ -388,6 +402,20 @@ class GerenciadorFirebirdApp(tk.Tk):
         log_frame = ttk.LabelFrame(dashboard_frame, text="Log de Execução", padding=10)
         log_frame.pack(padx=10, pady=10, fill="both", expand=True)
 
+        # Frame para controles do log
+        log_controls_frame = ttk.Frame(log_frame)
+        log_controls_frame.pack(fill="x", pady=(0, 5))
+        
+        # Botão limpar logs da tela
+        self.btn_clear_logs = ttk.Button(
+            log_controls_frame,
+            text="Limpar tela de Logs",
+            cursor="hand2",
+            command=self.clear_screen_logs,
+            width=30
+        )
+        self.btn_clear_logs.pack(side="right", padx=5)
+
         self.output = scrolledtext.ScrolledText(log_frame, height=15)
         self.output.pack(fill="both", expand=True)
       
@@ -399,6 +427,11 @@ class GerenciadorFirebirdApp(tk.Tk):
 
         self.log("✅ Aplicativo iniciado. Selecione uma ação acima.", "success")
 
+    def clear_screen_logs(self):
+        """Limpa os logs visíveis na tela"""
+        self.output.delete("1.0", tk.END)
+        self.set_status("✅ Logs da tela limpos com sucesso", "green")
+    
     def _create_monitor_tab(self):
         """Cria aba de monitoramento"""
         monitor_frame = ttk.Frame(self.notebook)
@@ -2188,40 +2221,6 @@ class GerenciadorFirebirdApp(tk.Tk):
         except Exception as e:
             self.disk_status.config(text=f"❌ Erro: {str(e)}")
 
-    def _refresh_all_processes(self):
-        """Atualiza lista de todos os processos do sistema"""
-        try:
-            for item in self.all_processes_tree.get_children():
-                self.all_processes_tree.delete(item)
-            
-            search_term = self.search_var.get().lower()
-            
-            process_count = 0
-            for proc in psutil.process_iter(['pid', 'name', 'username', 'status']):
-                try:
-                    proc_info = proc.info
-                    proc_name = proc_info['name'] or ''
-                    proc_user = proc_info['username'] or ''
-                    
-                    if search_term and search_term not in proc_name.lower():
-                        continue
-                    
-                    self.all_processes_tree.insert("", "end", values=(
-                        proc_info['pid'],
-                        proc_name,
-                        proc_user,
-                        proc_info['status']
-                    ))
-                    process_count += 1
-                    
-                except (psutil.NoSuchProcess, psutil.AccessDenied):
-                    continue
-            
-            self.process_status_label.config(text=f"✅ {process_count} processos encontrados")
-            
-        except Exception as e:
-            self.process_status_label.config(text=f"❌ Erro ao carregar processos: {e}")
-
     def _kill_selected_processes(self):
         """Finaliza processos selecionados"""
         selection = self.all_processes_tree.selection()
@@ -2629,13 +2628,19 @@ class GerenciadorFirebirdApp(tk.Tk):
         def after_gstat():
             self.set_status("✅ Relatório gstat gerado", "green")
             self.log(f"✅ Relatório gstat salvo: {report_path}", "success")
-            messagebox.showinfo(
+            
+            # Mostra mensagem e abre o relatório
+            response = messagebox.showinfo(
                 "Relatório Gerado",
                 f"Relatório do banco gerado com sucesso!\n\n"
                 f"Arquivo: {report_path}\n\n"
                 f"O relatório contém informações detalhadas sobre:\n"
-                f"• Estrutura do banco\n• Tabelas e índices\n• Estatísticas de uso"
+                f"• Estrutura do banco\n• Tabelas e índices\n• Estatísticas de uso\n\n"
+                f"Clique em OK para abrir o relatório automaticamente."
             )
+            
+            # Abre o relatório automaticamente
+            self.open_report_file(report_path)
 
         def run_gstat_with_output():
             try:
@@ -2676,6 +2681,22 @@ class GerenciadorFirebirdApp(tk.Tk):
                 self.after(0, lambda: self.log(f"❌ Erro ao executar gstat: {e}", "error"))
 
         threading.Thread(target=run_gstat_with_output, daemon=True).start()
+
+    def open_report_file(self, file_path):
+        """Abre o arquivo de relatório no programa padrão do sistema"""
+        try:
+            if open_file_with_default_app(file_path):
+                self.log(f"📂 Relatório aberto automaticamente: {file_path}", "success")
+            else:
+                self.log(f"⚠️ Não foi possível abrir o relatório automaticamente: {file_path}", "warning")
+                messagebox.showwarning(
+                    "Abrir Relatório", 
+                    f"Não foi possível abrir o relatório automaticamente.\n\n"
+                    f"Localização do arquivo:\n{file_path}"
+                )
+        except Exception as e:
+            self.log(f"❌ Erro ao abrir relatório: {e}", "error")
+            messagebox.showerror("Erro", f"Erro ao abrir relatório:\n{e}")
 
     def generate_system_report(self):
         """Gera relatório detalhado do sistema"""
@@ -2746,10 +2767,21 @@ class GerenciadorFirebirdApp(tk.Tk):
                 f.write('\n'.join(report))
             
             self.log(f"📊 Relatório do sistema gerado: {report_path}", "success")
-            messagebox.showinfo("Relatório", f"Relatório salvo em:\n{report_path}")
+            
+            # Mostra mensagem e abre o relatório
+            response = messagebox.showinfo(
+                "Relatório Gerado", 
+                f"Relatório do sistema gerado com sucesso!\n\n"
+                f"Localização: {report_path}\n\n"
+                f"Clique em OK para abrir o relatório automaticamente."
+            )
+            
+            # Abre o relatório automaticamente
+            self.open_report_file(report_path)
             
         except Exception as e:
             self.log(f"❌ Erro ao gerar relatório: {e}", "error")
+            messagebox.showerror("Erro", f"Falha ao gerar relatório:\n{e}")
 
     def _get_firebird_processes(self):
         """Retorna lista de processos do Firebird"""
