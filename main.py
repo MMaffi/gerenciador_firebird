@@ -199,36 +199,6 @@ def cleanup_old_backups(backup_dir: Path, keep: int):
     except Exception as e:
         logging.error(f"Erro durante limpeza de backups: {e}")
 
-def kill_firebird_processes():
-    """Mata processos do Firebird de forma segura"""
-    firebird_processes = [
-        "fb_inet_server.exe", "fbserver.exe", "fbguard.exe", 
-        "firebird.exe", "ibserver.exe", "gbak.exe", "gfix.exe", "gstat.exe"
-    ]
-    
-    killed_count = 0
-    try:
-        for proc in psutil.process_iter(['pid', 'name']):
-            try:
-                proc_name = proc.info['name'].lower() if proc.info['name'] else ''
-                if any(fb_proc in proc_name for fb_proc in [p.lower() for p in firebird_processes]):
-                    pid = proc.info['pid']
-                    proc_name = proc.info['name']
-                    p = psutil.Process(pid)
-                    p.terminate()
-                    p.wait(timeout=5)
-                    killed_count += 1
-                    logging.info(f"Processo finalizado: {proc_name} (PID: {pid})")
-            except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.TimeoutExpired):
-                continue
-                
-    except Exception as e:
-        logging.error(f"Erro ao finalizar processos: {e}")
-        return False
-    
-    logging.info(f"Total de processos finalizados: {killed_count}")
-    return killed_count > 0
-
 def get_disk_space(path):
     """Retorna informações de espaço em disco"""
     try:
@@ -385,20 +355,13 @@ class GerenciadorFirebirdApp(tk.Tk):
             cursor="hand2",
             command=self.verify
         )
-        self.btn_kill = ttk.Button(
-            btn_frame, 
-            text="🔥 Matar Instâncias",
-            cursor="hand2", 
-            command=self.kill
-        )
 
         # Layout dos botões
         self.btn_backup.grid(row=0, column=0, padx=5, pady=5, sticky="ew")
         self.btn_restore.grid(row=0, column=1, padx=5, pady=5, sticky="ew")
         self.btn_verify.grid(row=0, column=2, padx=5, pady=5, sticky="ew")
-        self.btn_kill.grid(row=0, column=3, padx=5, pady=5, sticky="ew")
         
-        for i in range(4):
+        for i in range(3):
             btn_frame.columnconfigure(i, weight=1)
 
         # Status
@@ -1145,13 +1108,13 @@ class GerenciadorFirebirdApp(tk.Tk):
 
     def disable_buttons(self):
         """Desabilita todos os botões durante operações"""
-        buttons = [self.btn_backup, self.btn_restore, self.btn_verify, self.btn_kill]
+        buttons = [self.btn_backup, self.btn_restore, self.btn_verify]
         for btn in buttons:
             btn.state(["disabled"])
 
     def enable_buttons(self):
         """Reabilita todos os botões"""
-        buttons = [self.btn_backup, self.btn_restore, self.btn_verify, self.btn_kill]
+        buttons = [self.btn_backup, self.btn_restore, self.btn_verify]
         for btn in buttons:
             btn.state(["!disabled"])
 
@@ -2164,26 +2127,6 @@ class GerenciadorFirebirdApp(tk.Tk):
             )
 
         self.run_command(cmd, on_finish=after_sweep)
-
-    def kill(self):
-        """Finaliza processos do Firebird"""
-        self.log("🚫 Iniciando finalização de processos do Firebird...", "warning")
-        self.set_status("Finalizando processos do Firebird...", "orange")
-        
-        def kill_processes():
-            success = kill_firebird_processes()
-            self.after(0, lambda: self._on_kill_complete(success))
-        
-        threading.Thread(target=kill_processes, daemon=True).start()
-
-    def _on_kill_complete(self, success):
-        """Callback após finalizar processos do Firebird"""
-        if success:
-            self.set_status("✅ Processos do Firebird finalizados!", "green")
-            self.log("✅ Todos os processos do Firebird foram finalizados com sucesso.", "success")
-        else:
-            self.set_status("ℹ️ Nenhum processo do Firebird encontrado ou erro ao finalizar.", "blue")
-            self.log("ℹ️ Nenhum processo do Firebird em execução ou erro ao finalizar.", "info")
 
     # ---------- GERENCIAMENTO DE PROCESSOS ----------
     def refresh_monitor(self):
