@@ -12,7 +12,7 @@ import subprocess
 import tempfile
 import zipfile
 import psutil
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 import threading
 import logging
@@ -74,6 +74,38 @@ PAGE_SIZE_OPTIONS = [
 ]
 
 # ---------- LOGGING ----------
+def cleanup_old_logs(log_file_path, max_days):
+    """Remove logs antigos"""
+    try:
+        if not log_file_path.exists():
+            return
+        
+        cutoff_date = datetime.now() - timedelta(days=max_days)
+        
+        with open(log_file_path, 'r', encoding='utf-8') as f:
+            lines = f.readlines()
+        
+        new_lines = []
+        for line in lines:
+            if len(line) >= 19:
+                try:
+                    log_date_str = line[:19]
+                    log_date = datetime.strptime(log_date_str, '%Y-%m-%d %H:%M:%S')
+                    if log_date >= cutoff_date:
+                        new_lines.append(line)
+                except ValueError:
+                    new_lines.append(line)
+            else:
+                new_lines.append(line)
+        
+        with open(log_file_path, 'w', encoding='utf-8') as f:
+            f.writelines(new_lines)
+            
+        logging.info(f"Limpeza de logs concluída. Mantidos logs dos últimos {max_days} dias")
+        
+    except Exception as e:
+        logging.error(f"Erro ao limpar logs antigos: {e}")
+
 def setup_logging():
     LOG_FILE.parent.mkdir(exist_ok=True)
     
@@ -114,7 +146,8 @@ def load_config():
         "minimize_to_tray": True,
         "start_minimized": False,
         "start_with_windows": False,
-        "scheduled_backups": []
+        "scheduled_backups": [],
+        "log_retention_days": 30
     }
     
     if CONFIG_PATH.exists():
@@ -133,6 +166,12 @@ def load_config():
             logging.info("Arquivo de configuração criado com sucesso")
         except Exception as e:
             logging.error(f"Falha ao criar config.json: {e}")
+    
+    # Executa limpeza de logs ao carregar configurações
+    try:
+        cleanup_old_logs(LOG_FILE, default.get("log_retention_days", 30))
+    except Exception as e:
+        logging.error(f"Erro na limpeza inicial de logs: {e}")
     
     return default
 
@@ -2758,6 +2797,22 @@ class GerenciadorFirebirdApp(tk.Tk):
 
         threading.Thread(target=run_gstat_with_output, daemon=True).start()
 
+    def open_report_file(self, file_path):
+        """Abre o arquivo de relatório no programa padrão do sistema"""
+        try:
+            if open_file_with_default_app(file_path):
+                self.log(f"📂 Relatório aberto automaticamente: {file_path}", "success")
+            else:
+                self.log(f"⚠️ Não foi possível abrir o relatório automaticamente: {file_path}", "warning")
+                messagebox.showwarning(
+                    "Abrir Relatório", 
+                    f"Não foi possível abrir o relatório automaticamente.\n\n"
+                    f"Localização do arquivo:\n{file_path}"
+                )
+        except Exception as e:
+            self.log(f"❌ Erro ao abrir relatório: {e}", "error")
+            messagebox.showerror("Erro", f"Erro ao abrir relatório:\n{e}")
+
     def generate_system_report(self):
         """Gera relatório detalhado do sistema"""
         try:
@@ -2853,7 +2908,6 @@ class GerenciadorFirebirdApp(tk.Tk):
     def check_disk_space(self):
         """Verifica e exibe o espaço em disco de todas as unidades disponíveis"""
         try:
-            # Obtém todas os disco disponíveis
             partitions = psutil.disk_partitions(all=False)  # all=False para ignorar partições virtuais
             
             if not partitions:
@@ -2935,7 +2989,7 @@ class GerenciadorFirebirdApp(tk.Tk):
             messagebox.showerror("Erro", error_msg)
 
     def _show_report_window(self, title, report_lines, report_path):
-        """Mostra relatório"""
+        """Mostra relatório em janela personalizada"""
         report_win = tk.Toplevel(self)
         report_win.title(title)
         report_win.geometry("700x600")
@@ -3002,40 +3056,12 @@ class GerenciadorFirebirdApp(tk.Tk):
         def close_window():
             report_win.destroy()
         
-        # Botão específico para GSTAT
-        def generate_new_gstat():
-            report_win.destroy()
-            self.generate_gstat_report()
-        
         ttk.Button(
             btn_frame, 
             text="📂 Abrir Relatório",
             command=open_report,
             cursor="hand2"
         ).pack(side="left", padx=5)
-        
-        # Botão dinâmico
-        if "GSTAT" in title or "Banco" in title:
-            ttk.Button(
-                btn_frame,
-                text="📈 Gerar Novo Relatório",
-                command=generate_new_gstat,
-                cursor="hand2"
-            ).pack(side="left", padx=5)
-        elif "Espaço" in title:
-            ttk.Button(
-                btn_frame,
-                text="🔄 Atualizar",
-                command=self.check_disk_space,
-                cursor="hand2"
-            ).pack(side="left", padx=5)
-        else:
-            ttk.Button(
-                btn_frame,
-                text="📊 Gerar Novo",
-                command=self.generate_system_report,
-                cursor="hand2"
-            ).pack(side="left", padx=5)
         
         ttk.Button(
             btn_frame,
@@ -3098,7 +3124,7 @@ class GerenciadorFirebirdApp(tk.Tk):
         """Janela de configurações"""
         win = tk.Toplevel(self)
         win.title("Configurações do Sistema")
-        win.geometry("500x700")
+        win.geometry("500x750")
         win.resizable(False, False)
         win.transient(self)
         win.grab_set()
@@ -3189,21 +3215,28 @@ class GerenciadorFirebirdApp(tk.Tk):
         interval_var = tk.IntVar(value=self.conf.get("monitor_interval", 30))
         ttk.Spinbox(system_frame, from_=10, to=300, textvariable=interval_var, width=10).grid(row=1, column=1, sticky="w", padx=5)
 
-        # Comportamento
-        ttk.Label(system_frame, text="Minimizar para bandeja:").grid(row=2, column=0, sticky="w", pady=8)
-        tray_var = tk.BooleanVar(value=self.conf.get("minimize_to_tray", True))
-        ttk.Checkbutton(system_frame, variable=tray_var).grid(row=2, column=1, sticky="w", padx=5)
+        # Limpeza de Logs
+        ttk.Label(system_frame, text="Manter logs por (dias):").grid(row=2, column=0, sticky="w", pady=8)
+        log_retention_var = tk.IntVar(value=self.conf.get("log_retention_days", 30))
+        log_spinbox = ttk.Spinbox(system_frame, from_=1, to=365, textvariable=log_retention_var, width=10)
+        log_spinbox.grid(row=2, column=1, sticky="w", padx=5)
+        ttk.Label(system_frame, text="(1-365 dias)").grid(row=2, column=2, sticky="e", padx=5)
 
-        ttk.Label(system_frame, text="Iniciar minimizado:").grid(row=3, column=0, sticky="w", pady=8)
+        # Comportamento
+        ttk.Label(system_frame, text="Minimizar para bandeja:").grid(row=3, column=0, sticky="w", pady=8)
+        tray_var = tk.BooleanVar(value=self.conf.get("minimize_to_tray", True))
+        ttk.Checkbutton(system_frame, variable=tray_var).grid(row=3, column=1, sticky="w", padx=5)
+
+        ttk.Label(system_frame, text="Iniciar minimizado:").grid(row=4, column=0, sticky="w", pady=8)
         start_min_var = tk.BooleanVar(value=self.conf.get("start_minimized", False))
-        ttk.Checkbutton(system_frame, variable=start_min_var).grid(row=3, column=1, sticky="w", padx=5)
+        ttk.Checkbutton(system_frame, variable=start_min_var).grid(row=4, column=1, sticky="w", padx=5)
 
         # Iniciar com Windows
-        ttk.Label(system_frame, text="Iniciar com Windows:").grid(row=4, column=0, sticky="w", pady=8)
+        ttk.Label(system_frame, text="Iniciar com Windows:").grid(row=5, column=0, sticky="w", pady=8)
         startup_var = tk.BooleanVar(value=self.conf.get("start_with_windows", False))
         startup_cb = ttk.Checkbutton(system_frame, variable=startup_var, 
                                     command=lambda: self.toggle_startup(startup_var.get()))
-        startup_cb.grid(row=4, column=1, sticky="w", padx=5)
+        startup_cb.grid(row=5, column=1, sticky="w", padx=5)
 
         # Botões
         btn_frame = ttk.Frame(win)
@@ -3225,12 +3258,20 @@ class GerenciadorFirebirdApp(tk.Tk):
                 "monitor_interval": interval_var.get(),
                 "minimize_to_tray": tray_var.get(),
                 "start_minimized": start_min_var.get(),
-                "start_with_windows": startup_var.get()
+                "start_with_windows": startup_var.get(),
+                "log_retention_days": log_retention_var.get()
             })
             
             if save_config(self.conf):
                 # Aplica a configuração de inicialização com Windows
                 self.apply_startup_setting(startup_var.get())
+                # Executa limpeza de logs
+                try:
+                    cleanup_old_logs(LOG_FILE, log_retention_var.get())
+                    self.log(f"🧹 Configuração de logs atualizada: {log_retention_var.get()} dias", "info")
+                except Exception as e:
+                    self.log(f"⚠️ Erro na limpeza de logs: {e}", "warning")
+                
                 messagebox.showinfo("Configurações", "Configurações salvas com sucesso!")
                 win.destroy()
             else:
