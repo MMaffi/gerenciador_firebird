@@ -12,7 +12,7 @@ import subprocess
 import tempfile
 import zipfile
 import psutil
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 import threading
 import logging
@@ -74,6 +74,38 @@ PAGE_SIZE_OPTIONS = [
 ]
 
 # ---------- LOGGING ----------
+def cleanup_old_logs(log_file_path, max_days):
+    """Remove logs antigos"""
+    try:
+        if not log_file_path.exists():
+            return
+        
+        cutoff_date = datetime.now() - timedelta(days=max_days)
+        
+        with open(log_file_path, 'r', encoding='utf-8') as f:
+            lines = f.readlines()
+        
+        new_lines = []
+        for line in lines:
+            if len(line) >= 19:
+                try:
+                    log_date_str = line[:19]
+                    log_date = datetime.strptime(log_date_str, '%Y-%m-%d %H:%M:%S')
+                    if log_date >= cutoff_date:
+                        new_lines.append(line)
+                except ValueError:
+                    new_lines.append(line)
+            else:
+                new_lines.append(line)
+        
+        with open(log_file_path, 'w', encoding='utf-8') as f:
+            f.writelines(new_lines)
+            
+        logging.info(f"Limpeza de logs concluída. Mantidos logs dos últimos {max_days} dias")
+        
+    except Exception as e:
+        logging.error(f"Erro ao limpar logs antigos: {e}")
+
 def setup_logging():
     LOG_FILE.parent.mkdir(exist_ok=True)
     
@@ -114,7 +146,8 @@ def load_config():
         "minimize_to_tray": True,
         "start_minimized": False,
         "start_with_windows": False,
-        "scheduled_backups": []
+        "scheduled_backups": [],
+        "log_retention_days": 30
     }
     
     if CONFIG_PATH.exists():
@@ -133,6 +166,12 @@ def load_config():
             logging.info("Arquivo de configuração criado com sucesso")
         except Exception as e:
             logging.error(f"Falha ao criar config.json: {e}")
+    
+    # Executa limpeza de logs ao carregar configurações
+    try:
+        cleanup_old_logs(LOG_FILE, default.get("log_retention_days", 30))
+    except Exception as e:
+        logging.error(f"Erro na limpeza inicial de logs: {e}")
     
     return default
 
@@ -202,6 +241,11 @@ def cleanup_old_backups(backup_dir: Path, keep: int):
 def get_disk_space(path):
     """Retorna informações de espaço em disco"""
     try:
+        path = Path(path) if isinstance(path, str) else path
+        
+        if not path.exists():
+            path = path.parent if path.parent.exists() else Path.cwd()
+        
         usage = shutil.disk_usage(path)
         return {
             'total': usage.total,
@@ -212,8 +256,22 @@ def get_disk_space(path):
             'percent_used': (usage.used / usage.total) * 100
         }
     except Exception as e:
-        logging.error(f"Erro ao verificar espaço em disco: {e}")
+        logging.error(f"Erro ao verificar espaço em disco para {path}: {e}")
         return None
+
+def open_file_with_default_app(file_path):
+    """Abre arquivo com programa padrão do sistema"""
+    try:
+        if os.name == 'nt':
+            os.startfile(file_path)
+        elif sys.platform == 'darwin':
+            subprocess.run(['open', file_path])
+        else:
+            subprocess.run(['xdg-open', file_path])
+        return True
+    except Exception as e:
+        logging.error(f"Erro ao abrir arquivo {file_path}: {e}")
+        return False
 
 # ------------ APP PRINCIPAL ------------
 class GerenciadorFirebirdApp(tk.Tk):
@@ -388,6 +446,20 @@ class GerenciadorFirebirdApp(tk.Tk):
         log_frame = ttk.LabelFrame(dashboard_frame, text="Log de Execução", padding=10)
         log_frame.pack(padx=10, pady=10, fill="both", expand=True)
 
+        # Frame para controles do log
+        log_controls_frame = ttk.Frame(log_frame)
+        log_controls_frame.pack(fill="x", pady=(0, 5))
+        
+        # Botão limpar logs da tela
+        self.btn_clear_logs = ttk.Button(
+            log_controls_frame,
+            text="Limpar tela de Logs",
+            cursor="hand2",
+            command=self.clear_screen_logs,
+            width=30
+        )
+        self.btn_clear_logs.pack(side="right", padx=5)
+
         self.output = scrolledtext.ScrolledText(log_frame, height=15)
         self.output.pack(fill="both", expand=True)
       
@@ -399,6 +471,11 @@ class GerenciadorFirebirdApp(tk.Tk):
 
         self.log("✅ Aplicativo iniciado. Selecione uma ação acima.", "success")
 
+    def clear_screen_logs(self):
+        """Limpa os logs visíveis na tela"""
+        self.output.delete("1.0", tk.END)
+        self.set_status("✅ Logs da tela limpos com sucesso", "green")
+    
     def _create_monitor_tab(self):
         """Cria aba de monitoramento"""
         monitor_frame = ttk.Frame(self.notebook)
@@ -1244,14 +1321,71 @@ class GerenciadorFirebirdApp(tk.Tk):
         if not db:
             return
 
-        backup_dir = Path(self.conf.get("backup_dir", BASE_DIR / "backups"))
-        backup_dir.mkdir(parents=True, exist_ok=True)
-        
-        timestamp = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
-        db_name = Path(db).stem
-        name = f"backup_{db_name}_{timestamp}.fbk"
-        backup_path = backup_dir / name
+        # Verifica o tamanho do banco de dados
+        try:
+            db_size = os.path.getsize(db)
+            db_size_gb = db_size / (1024**3)
+            self.log(f"📊 Tamanho do banco: {db_size_gb:.2f} GB", "info")
+        except Exception as e:
+            self.log(f"⚠️ Não foi possível verificar o tamanho do banco: {e}", "warning")
+            db_size_gb = 0
 
+        backup_dir_default = Path(self.conf.get("backup_dir", DEFAULT_BACKUP_DIR))
+        
+        backup_path = filedialog.asksaveasfilename(
+            title="Salvar backup como...",
+            initialdir=backup_dir_default,
+            defaultextension=".fbk",
+            filetypes=[("Firebird Backup", "*.fbk"), ("Todos os arquivos", "*.*")]
+        )
+        
+        if not backup_path:
+            return
+
+        backup_path = Path(backup_path)
+        backup_dir = backup_path.parent
+        
+        # Verifica espaço livre no disco
+        disk_info = get_disk_space(backup_dir)
+        if not disk_info:
+            messagebox.showerror("Erro", "Não foi possível verificar o espaço em disco.")
+            return
+        
+        free_space_gb = disk_info['free_gb']
+        
+        # Estima o tamanho do backup
+        estimated_backup_size_gb = db_size_gb * 0.7
+        
+        # Verifica se há espaço suficiente
+        required_space_gb = max(estimated_backup_size_gb, 0.1)
+        
+        if free_space_gb < required_space_gb:
+            error_msg = (
+                f"🚨 ESPAÇO INSUFICIENTE PARA BACKUP!\n\n"
+                f"Espaço livre no disco: {free_space_gb:.2f} GB\n"
+                f"Espaço estimado necessário: {required_space_gb:.2f} GB\n"
+                f"Espaço faltante: {required_space_gb - free_space_gb:.2f} GB\n\n"
+                f"Libere espaço em disco antes de continuar."
+            )
+            self.log(f"❌ {error_msg}", "error")
+            messagebox.showerror("Espaço Insuficiente", error_msg)
+            return
+        
+        elif free_space_gb < (required_space_gb * 2):
+            warning_msg = (
+                f"⚠️ ESPAÇO LIMITADO NO DISCO\n\n"
+                f"Espaço livre: {free_space_gb:.2f} GB\n"
+                f"Espaço necessário: {required_space_gb:.2f} GB\n"
+                f"Espaço restante após backup: {free_space_gb - required_space_gb:.2f} GB\n\n"
+                f"Deseja continuar mesmo assim?"
+            )
+            self.log(f"⚠️ {warning_msg}", "warning")
+            if not messagebox.askyesno("Espaço Limitado", warning_msg, icon=messagebox.WARNING):
+                self.log("❌ Backup cancelado pelo usuário devido a espaço limitado", "info")
+                return
+        
+        self.log(f"✅ Espaço em disco suficiente: {free_space_gb:.2f} GB livres", "success")
+        
         compress = messagebox.askyesno(
             "Compactar Backup", 
             "Deseja compactar o backup após gerar?\n\n"
@@ -1271,6 +1405,7 @@ class GerenciadorFirebirdApp(tk.Tk):
 
         self.log(f"🟦 Iniciando backup: {db} -> {backup_path}", "info")
         self.log(f"🔌 Conectando em: {self._get_service_mgr_string()}", "info")
+        self.log(f"💾 Espaço disponível: {free_space_gb:.2f} GB", "info")
         self.set_status("Gerando backup, por favor aguarde...", "blue")
 
         def after_backup():
@@ -1336,7 +1471,28 @@ class GerenciadorFirebirdApp(tk.Tk):
                 self.log(f"❌ Backup agendado '{schedule_name}' falhou: Banco não encontrado", "error")
                 return
 
+            # Verifica espaço em disco antes do backup agendado
             backup_dir = Path(self.conf.get("backup_dir", DEFAULT_BACKUP_DIR))
+            disk_info = get_disk_space(backup_dir)
+            
+            if not disk_info:
+                self.log(f"❌ Backup agendado '{schedule_name}' falhou: Não foi possível verificar espaço em disco", "error")
+                return
+            
+            free_space_gb = disk_info['free_gb']
+            
+            # Verifica tamanho aproximado do banco
+            try:
+                db_size = os.path.getsize(db_path)
+                db_size_gb = db_size / (1024**3)
+                required_space_gb = max(db_size_gb * 0.7, 0.1) 
+            except:
+                required_space_gb = 1.0
+                
+            if free_space_gb < required_space_gb:
+                self.log(f"❌ Backup agendado '{schedule_name}' cancelado: Espaço insuficiente. Livre: {free_space_gb:.2f}GB, Necessário: ~{required_space_gb:.2f}GB", "error")
+                return
+                
             backup_dir.mkdir(parents=True, exist_ok=True)
             
             timestamp = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
@@ -1346,6 +1502,7 @@ class GerenciadorFirebirdApp(tk.Tk):
 
             self.log(f"🕒 Executando backup agendado: {schedule_name}", "info")
             self.log(f"🔌 Conectando em: {self._get_service_mgr_string()}", "info")
+            self.log(f"💾 Espaço disponível: {free_space_gb:.2f} GB", "info")
 
             cmd = [
                 gbak, "-b", 
@@ -2188,40 +2345,6 @@ class GerenciadorFirebirdApp(tk.Tk):
         except Exception as e:
             self.disk_status.config(text=f"❌ Erro: {str(e)}")
 
-    def _refresh_all_processes(self):
-        """Atualiza lista de todos os processos do sistema"""
-        try:
-            for item in self.all_processes_tree.get_children():
-                self.all_processes_tree.delete(item)
-            
-            search_term = self.search_var.get().lower()
-            
-            process_count = 0
-            for proc in psutil.process_iter(['pid', 'name', 'username', 'status']):
-                try:
-                    proc_info = proc.info
-                    proc_name = proc_info['name'] or ''
-                    proc_user = proc_info['username'] or ''
-                    
-                    if search_term and search_term not in proc_name.lower():
-                        continue
-                    
-                    self.all_processes_tree.insert("", "end", values=(
-                        proc_info['pid'],
-                        proc_name,
-                        proc_user,
-                        proc_info['status']
-                    ))
-                    process_count += 1
-                    
-                except (psutil.NoSuchProcess, psutil.AccessDenied):
-                    continue
-            
-            self.process_status_label.config(text=f"✅ {process_count} processos encontrados")
-            
-        except Exception as e:
-            self.process_status_label.config(text=f"❌ Erro ao carregar processos: {e}")
-
     def _kill_selected_processes(self):
         """Finaliza processos selecionados"""
         selection = self.all_processes_tree.selection()
@@ -2626,17 +2749,6 @@ class GerenciadorFirebirdApp(tk.Tk):
             "-pass", self.conf.get("firebird_password", "masterkey")
         ]
 
-        def after_gstat():
-            self.set_status("✅ Relatório gstat gerado", "green")
-            self.log(f"✅ Relatório gstat salvo: {report_path}", "success")
-            messagebox.showinfo(
-                "Relatório Gerado",
-                f"Relatório do banco gerado com sucesso!\n\n"
-                f"Arquivo: {report_path}\n\n"
-                f"O relatório contém informações detalhadas sobre:\n"
-                f"• Estrutura do banco\n• Tabelas e índices\n• Estatísticas de uso"
-            )
-
         def run_gstat_with_output():
             try:
                 CREATE_NO_WINDOW = 0x08000000 if sys.platform == "win32" else 0
@@ -2655,7 +2767,6 @@ class GerenciadorFirebirdApp(tk.Tk):
                 for line in iter(process.stdout.readline, ''):
                     if line.strip():
                         output_lines.append(line.strip())
-                        self.log(line.strip(), "info")
 
                 process.stdout.close()
                 return_code = process.wait()
@@ -2667,8 +2778,17 @@ class GerenciadorFirebirdApp(tk.Tk):
                     f.write("=" * 50 + "\n\n")
                     f.write("\n".join(output_lines))
 
+                report_lines = []
+                report_lines.append(f"📈 RELATÓRIO GSTAT - {db_name}")
+                report_lines.append("=" * 50)
+                report_lines.append(f"Gerado em: {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}")
+                report_lines.append("")
+                report_lines.extend(output_lines)
+
                 if return_code == 0:
-                    self.after(0, after_gstat)
+                    self.after(0, lambda: self.set_status("✅ Relatório gstat gerado", "green"))
+                    self.after(0, lambda: self.log(f"✅ Relatório gstat salvo: {report_path}", "success"))
+                    self.after(0, lambda: self._show_report_window("Relatório do Banco (GSTAT)", report_lines, report_path))
                 else:
                     self.after(0, lambda: self.log(f"❌ Gstat retornou código de erro: {return_code}", "error"))
 
@@ -2677,79 +2797,99 @@ class GerenciadorFirebirdApp(tk.Tk):
 
         threading.Thread(target=run_gstat_with_output, daemon=True).start()
 
+    def open_report_file(self, file_path):
+        """Abre o arquivo de relatório no programa padrão do sistema"""
+        try:
+            if open_file_with_default_app(file_path):
+                self.log(f"📂 Relatório aberto automaticamente: {file_path}", "success")
+            else:
+                self.log(f"⚠️ Não foi possível abrir o relatório automaticamente: {file_path}", "warning")
+                messagebox.showwarning(
+                    "Abrir Relatório", 
+                    f"Não foi possível abrir o relatório automaticamente.\n\n"
+                    f"Localização do arquivo:\n{file_path}"
+                )
+        except Exception as e:
+            self.log(f"❌ Erro ao abrir relatório: {e}", "error")
+            messagebox.showerror("Erro", f"Erro ao abrir relatório:\n{e}")
+
     def generate_system_report(self):
         """Gera relatório detalhado do sistema"""
         try:
             # Cria pasta de relatórios se não existir
             REPORTS_DIR.mkdir(exist_ok=True)
             
-            report = []
-            report.append("=" * 60)
-            report.append("RELATÓRIO DO SISTEMA GERENCIADOR FIREBIRD")
-            report.append(f"Gerado em: {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}")
-            report.append("=" * 60)
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            report_path = REPORTS_DIR / f"relatorio_sistema_{timestamp}.txt"
+            
+            report_lines = []
+            report_lines.append("=" * 60)
+            report_lines.append("RELATÓRIO DO SISTEMA GERENCIADOR FIREBIRD")
+            report_lines.append(f"Gerado em: {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}")
+            report_lines.append("=" * 60)
             
             # Informações do sistema
-            report.append("\n📊 INFORMAÇÕES DO SISTEMA:")
-            report.append(f"- Diretório base: {BASE_DIR}")
-            report.append(f"- Diretório de backups: {self.conf.get('backup_dir', 'Não definido')}")
-            report.append(f"- Diretório de relatórios: {REPORTS_DIR}")
+            report_lines.append("\n📊 INFORMAÇÕES DO SISTEMA:")
+            report_lines.append(f"- Diretório base: {BASE_DIR}")
+            report_lines.append(f"- Diretório de backups: {self.conf.get('backup_dir', 'Não definido')}")
+            report_lines.append(f"- Diretório de relatórios: {REPORTS_DIR}")
             
             # Configurações Firebird
-            report.append(f"\n🔥 CONFIGURAÇÕES FIREBIRD:")
-            report.append(f"- Host: {self.conf.get('firebird_host', 'localhost')}")
-            report.append(f"- Porta: {self.conf.get('firebird_port', '26350')}")
-            report.append(f"- Usuário: {self.conf.get('firebird_user', 'SYSDBA')}")
-            report.append(f"- PageSize: {self.conf.get('page_size', '8192')}")
-            report.append(f"- Gbak: {self.conf.get('gbak_path', 'Não configurado')}")
-            report.append(f"- Gfix: {self.conf.get('gfix_path', 'Não configurado')}")
-            report.append(f"- Gstat: {self.conf.get('gstat_path', 'Não configurado')}")
+            report_lines.append(f"\n🔥 CONFIGURAÇÕES FIREBIRD:")
+            report_lines.append(f"- Host: {self.conf.get('firebird_host', 'localhost')}")
+            report_lines.append(f"- Porta: {self.conf.get('firebird_port', '26350')}")
+            report_lines.append(f"- Usuário: {self.conf.get('firebird_user', 'SYSDBA')}")
+            report_lines.append(f"- PageSize: {self.conf.get('page_size', '8192')}")
+            report_lines.append(f"- Gbak: {self.conf.get('gbak_path', 'Não configurado')}")
+            report_lines.append(f"- Gfix: {self.conf.get('gfix_path', 'Não configurado')}")
+            report_lines.append(f"- Gstat: {self.conf.get('gstat_path', 'Não configurado')}")
             
             # Espaço em disco
             backup_dir = Path(self.conf.get("backup_dir", DEFAULT_BACKUP_DIR))
             disk_info = get_disk_space(backup_dir)
             if disk_info:
-                report.append(f"\n💾 ESPAÇO EM DISCO:")
-                report.append(f"- Total: {disk_info['total_gb']:.1f} GB")
-                report.append(f"- Livre: {disk_info['free_gb']:.1f} GB")
-                report.append(f"- Usado: {disk_info['percent_used']:.1f}%")
+                report_lines.append(f"\n💾 ESPAÇO EM DISCO:")
+                report_lines.append(f"- Total: {disk_info['total_gb']:.1f} GB")
+                report_lines.append(f"- Livre: {disk_info['free_gb']:.1f} GB")
+                report_lines.append(f"- Usado: {disk_info['percent_used']:.1f}%")
             
             # Processos Firebird
             fb_processes = self._get_firebird_processes()
-            report.append(f"\n🔥 PROCESSOS FIREBIRD: {len(fb_processes)} encontrados")
+            report_lines.append(f"\n🔥 PROCESSOS FIREBIRD: {len(fb_processes)} encontrados")
             for proc in fb_processes:
-                report.append(f"  - {proc['name']} (PID: {proc['pid']})")
+                report_lines.append(f"  - {proc['name']} (PID: {proc['pid']})")
             
             # Backups
             backup_files = list(Path(self.conf.get("backup_dir", DEFAULT_BACKUP_DIR)).glob("*.fbk")) + \
                           list(Path(self.conf.get("backup_dir", DEFAULT_BACKUP_DIR)).glob("*.zip"))
-            report.append(f"\n📦 BACKUPS: {len(backup_files)} arquivos")
+            report_lines.append(f"\n📦 BACKUPS: {len(backup_files)} arquivos")
             if backup_files:
                 latest = max(backup_files, key=lambda f: f.stat().st_mtime)
-                report.append(f"- Último backup: {latest.name}")
-                report.append(f"  Gerado em: {datetime.fromtimestamp(latest.stat().st_mtime).strftime('%d/%m/%Y %H:%M')}")
+                report_lines.append(f"- Último backup: {latest.name}")
+                report_lines.append(f"  Gerado em: {datetime.fromtimestamp(latest.stat().st_mtime).strftime('%d/%m/%Y %H:%M')}")
             
             # Agendamentos
             scheduled_backups = self.conf.get("scheduled_backups", [])
-            report.append(f"\n🕒 AGENDAMENTOS: {len(scheduled_backups)} configurados")
+            report_lines.append(f"\n🕒 AGENDAMENTOS: {len(scheduled_backups)} configurados")
             for sched in scheduled_backups:
-                report.append(f"- {sched['name']}: {sched['frequency']} às {sched['time']}")
+                report_lines.append(f"- {sched['name']}: {sched['frequency']} às {sched['time']}")
             
             # Inicialização com Windows
             startup_status = "Sim" if self.conf.get("start_with_windows", False) else "Não"
-            report.append(f"\n🪟 INICIALIZAÇÃO COM WINDOWS: {startup_status}")
+            report_lines.append(f"\n🪟 INICIALIZAÇÃO COM WINDOWS: {startup_status}")
             
             # Salva relatório
-            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-            report_path = REPORTS_DIR / f"relatorio_sistema_{timestamp}.txt"
             with open(report_path, 'w', encoding='utf-8') as f:
-                f.write('\n'.join(report))
+                f.write('\n'.join(report_lines))
             
             self.log(f"📊 Relatório do sistema gerado: {report_path}", "success")
-            messagebox.showinfo("Relatório", f"Relatório salvo em:\n{report_path}")
+            
+            # Mostra relatório em janela personalizada
+            self._show_report_window("Relatório do Sistema", report_lines, report_path)
             
         except Exception as e:
             self.log(f"❌ Erro ao gerar relatório: {e}", "error")
+            messagebox.showerror("Erro", f"Falha ao gerar relatório:\n{e}")
 
     def _get_firebird_processes(self):
         """Retorna lista de processos do Firebird"""
@@ -2766,27 +2906,172 @@ class GerenciadorFirebirdApp(tk.Tk):
         return processes
 
     def check_disk_space(self):
-        """Verifica e alerta sobre espaço em disco"""
-        backup_dir = Path(self.conf.get("backup_dir", DEFAULT_BACKUP_DIR))
-        disk_info = get_disk_space(backup_dir)
-        
-        if disk_info:
-            free_gb = disk_info['free_gb']
+        """Verifica e exibe o espaço em disco de todas as unidades disponíveis"""
+        try:
+            partitions = psutil.disk_partitions(all=False)  # all=False para ignorar partições virtuais
             
-            if free_gb < 1:
-                msg = f"🚨 ESPAÇO CRÍTICO! Apenas {free_gb:.1f}GB livres!"
-                self.log(msg, "error")
-                messagebox.showwarning("Espaço em Disco", msg)
-            elif free_gb < 5:
-                msg = f"⚠️ Espaço limitado: {free_gb:.1f}GB livres"
-                self.log(msg, "warning")
-                messagebox.showwarning("Espaço em Disco", msg)
-            else:
-                msg = f"✅ Espaço suficiente: {free_gb:.1f}GB livres"
-                self.log(msg, "success")
-                messagebox.showinfo("Espaço em Disco", msg)
-        else:
-            messagebox.showerror("Erro", "Não foi possível verificar o espaço em disco.")
+            if not partitions:
+                messagebox.showinfo("Espaço em Disco", "Nenhuma unidade de disco encontrada.")
+                return
+            
+            report_lines = []
+            report_lines.append("💾 RELATÓRIO DE ESPAÇO EM DISCO")
+            report_lines.append("=" * 50)
+            report_lines.append(f"Gerado em: {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}")
+            report_lines.append("")
+            
+            for partition in partitions:
+                try:
+                    # Ignora partições de CD/DVD e outras mídias removíveis sem disco
+                    if partition.fstype and partition.device:
+                        usage = psutil.disk_usage(partition.mountpoint)
+                        
+                        total_gb = usage.total / (1024**3)
+                        used_gb = usage.used / (1024**3)
+                        free_gb = usage.free / (1024**3)
+                        percent_used = (usage.used / usage.total) * 100
+                        
+                        if free_gb < 1:
+                            status_icon = "🚨"
+                            status_text = "CRÍTICO"
+                        elif free_gb < 5:
+                            status_icon = "⚠️"
+                            status_text = "LIMITADO"
+                        else:
+                            status_icon = "✅"
+                            status_text = "SUFICIENTE"
+                        
+                        report_lines.append(f"{status_icon} Unidade: {partition.device}")
+                        report_lines.append(f"   Ponto de montagem: {partition.mountpoint}")
+                        report_lines.append(f"   Sistema de arquivos: {partition.fstype}")
+                        report_lines.append(f"   Total: {total_gb:.2f} GB")
+                        report_lines.append(f"   Usado: {used_gb:.2f} GB ({percent_used:.1f}%)")
+                        report_lines.append(f"   Livre: {free_gb:.2f} GB")
+                        report_lines.append(f"   Status: {status_text}")
+                        report_lines.append("")
+                        
+                except PermissionError:
+                    report_lines.append(f"🚫 Unidade: {partition.device}")
+                    report_lines.append(f"   Ponto de montagem: {partition.mountpoint}")
+                    report_lines.append(f"   Sistema de arquivos: {partition.fstype}")
+                    report_lines.append("   ❌ Acesso negado")
+                    report_lines.append("")
+                except Exception as e:
+                    report_lines.append(f"❌ Unidade: {partition.device}")
+                    report_lines.append(f"   Ponto de montagem: {partition.mountpoint}")
+                    report_lines.append(f"   Sistema de arquivos: {partition.fstype}")
+                    report_lines.append(f"   Erro: {str(e)}")
+                    report_lines.append("")
+            
+            # Adiciona resumo
+            accessible_partitions = [p for p in partitions if not p.fstype in ['cdrom', ''] and not p.device.startswith('\\\\')]
+            total_disks = len(accessible_partitions)
+            
+            report_lines.append("📊 RESUMO:")
+            report_lines.append(f"Total de unidades acessíveis: {total_disks}")
+            
+            # Salva relatório em arquivo
+            REPORTS_DIR.mkdir(exist_ok=True)
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            report_path = REPORTS_DIR / f"relatorio_espaco_disco_{timestamp}.txt"
+            
+            with open(report_path, 'w', encoding='utf-8') as f:
+                f.write('\n'.join(report_lines))
+            
+            # Mostra relatório em janela personalizada
+            self._show_report_window("Relatório de Espaço em Disco", report_lines, report_path)
+            
+            self.log("💾 Relatório de espaço em disco gerado com sucesso", "success")
+            
+        except Exception as e:
+            error_msg = f"❌ Erro ao verificar espaço em disco: {e}"
+            self.log(error_msg, "error")
+            messagebox.showerror("Erro", error_msg)
+
+    def _show_report_window(self, title, report_lines, report_path):
+        """Mostra relatório em janela personalizada"""
+        report_win = tk.Toplevel(self)
+        report_win.title(title)
+        report_win.geometry("700x600")
+        report_win.minsize(600, 400)
+        
+        # Centraliza
+        self.update_idletasks()
+        x = self.winfo_x() + (self.winfo_width() // 2) - 350
+        y = self.winfo_y() + (self.winfo_height() // 2) - 300
+        report_win.geometry(f"+{x}+{y}")
+        
+        # Ícone
+        icon_path = BASE_DIR / "images" / "icon.ico"
+        if icon_path.exists():
+            report_win.iconbitmap(str(icon_path))
+        
+        report_win.transient(self)
+        report_win.grab_set()
+        
+        # Frame principal
+        main_frame = ttk.Frame(report_win, padding=15)
+        main_frame.pack(fill="both", expand=True)
+        
+        # Título
+        title_label = ttk.Label(
+            main_frame, 
+            text=title,
+            font=("Arial", 14, "bold")
+        )
+        title_label.pack(pady=(0, 10))
+        
+        # Área de texto com scroll
+        text_frame = ttk.Frame(main_frame)
+        text_frame.pack(fill="both", expand=True, pady=10)
+        
+        text_area = scrolledtext.ScrolledText(
+            text_frame, 
+            wrap=tk.WORD,
+            font=("Consolas", 9),
+            height=20
+        )
+        text_area.pack(fill="both", expand=True)
+        text_area.insert("1.0", "\n".join(report_lines))
+        text_area.config(state="disabled")
+        
+        # Frame de botões
+        btn_frame = ttk.Frame(main_frame)
+        btn_frame.pack(fill="x", pady=10)
+        
+        def open_report():
+            """Abre o relatório no programa padrão"""
+            try:
+                if open_file_with_default_app(report_path):
+                    self.log(f"📂 Relatório aberto automaticamente: {report_path}", "success")
+                else:
+                    messagebox.showwarning(
+                        "Abrir Relatório", 
+                        f"Não foi possível abrir o relatório automaticamente.\n\n"
+                        f"Localização:\n{report_path}"
+                    )
+            except Exception as e:
+                messagebox.showerror("Erro", f"Erro ao abrir relatório:\n{e}")
+        
+        def close_window():
+            report_win.destroy()
+        
+        ttk.Button(
+            btn_frame, 
+            text="📂 Abrir Relatório",
+            command=open_report,
+            cursor="hand2"
+        ).pack(side="left", padx=5)
+        
+        ttk.Button(
+            btn_frame,
+            text="✅ Fechar",
+            command=close_window,
+            cursor="hand2"
+        ).pack(side="right", padx=5)
+        
+        # Foca na janela
+        report_win.focus_force()
 
     def export_config(self):
         """Exporta configurações para arquivo"""
@@ -2839,7 +3124,7 @@ class GerenciadorFirebirdApp(tk.Tk):
         """Janela de configurações"""
         win = tk.Toplevel(self)
         win.title("Configurações do Sistema")
-        win.geometry("500x700")
+        win.geometry("500x750")
         win.resizable(False, False)
         win.transient(self)
         win.grab_set()
@@ -2930,21 +3215,28 @@ class GerenciadorFirebirdApp(tk.Tk):
         interval_var = tk.IntVar(value=self.conf.get("monitor_interval", 30))
         ttk.Spinbox(system_frame, from_=10, to=300, textvariable=interval_var, width=10).grid(row=1, column=1, sticky="w", padx=5)
 
-        # Comportamento
-        ttk.Label(system_frame, text="Minimizar para bandeja:").grid(row=2, column=0, sticky="w", pady=8)
-        tray_var = tk.BooleanVar(value=self.conf.get("minimize_to_tray", True))
-        ttk.Checkbutton(system_frame, variable=tray_var).grid(row=2, column=1, sticky="w", padx=5)
+        # Limpeza de Logs
+        ttk.Label(system_frame, text="Manter logs por (dias):").grid(row=2, column=0, sticky="w", pady=8)
+        log_retention_var = tk.IntVar(value=self.conf.get("log_retention_days", 30))
+        log_spinbox = ttk.Spinbox(system_frame, from_=1, to=365, textvariable=log_retention_var, width=10)
+        log_spinbox.grid(row=2, column=1, sticky="w", padx=5)
+        ttk.Label(system_frame, text="(1-365 dias)").grid(row=2, column=2, sticky="e", padx=5)
 
-        ttk.Label(system_frame, text="Iniciar minimizado:").grid(row=3, column=0, sticky="w", pady=8)
+        # Comportamento
+        ttk.Label(system_frame, text="Minimizar para bandeja:").grid(row=3, column=0, sticky="w", pady=8)
+        tray_var = tk.BooleanVar(value=self.conf.get("minimize_to_tray", True))
+        ttk.Checkbutton(system_frame, variable=tray_var).grid(row=3, column=1, sticky="w", padx=5)
+
+        ttk.Label(system_frame, text="Iniciar minimizado:").grid(row=4, column=0, sticky="w", pady=8)
         start_min_var = tk.BooleanVar(value=self.conf.get("start_minimized", False))
-        ttk.Checkbutton(system_frame, variable=start_min_var).grid(row=3, column=1, sticky="w", padx=5)
+        ttk.Checkbutton(system_frame, variable=start_min_var).grid(row=4, column=1, sticky="w", padx=5)
 
         # Iniciar com Windows
-        ttk.Label(system_frame, text="Iniciar com Windows:").grid(row=4, column=0, sticky="w", pady=8)
+        ttk.Label(system_frame, text="Iniciar com Windows:").grid(row=5, column=0, sticky="w", pady=8)
         startup_var = tk.BooleanVar(value=self.conf.get("start_with_windows", False))
         startup_cb = ttk.Checkbutton(system_frame, variable=startup_var, 
                                     command=lambda: self.toggle_startup(startup_var.get()))
-        startup_cb.grid(row=4, column=1, sticky="w", padx=5)
+        startup_cb.grid(row=5, column=1, sticky="w", padx=5)
 
         # Botões
         btn_frame = ttk.Frame(win)
@@ -2966,12 +3258,20 @@ class GerenciadorFirebirdApp(tk.Tk):
                 "monitor_interval": interval_var.get(),
                 "minimize_to_tray": tray_var.get(),
                 "start_minimized": start_min_var.get(),
-                "start_with_windows": startup_var.get()
+                "start_with_windows": startup_var.get(),
+                "log_retention_days": log_retention_var.get()
             })
             
             if save_config(self.conf):
                 # Aplica a configuração de inicialização com Windows
                 self.apply_startup_setting(startup_var.get())
+                # Executa limpeza de logs
+                try:
+                    cleanup_old_logs(LOG_FILE, log_retention_var.get())
+                    self.log(f"🧹 Configuração de logs atualizada: {log_retention_var.get()} dias", "info")
+                except Exception as e:
+                    self.log(f"⚠️ Erro na limpeza de logs: {e}", "warning")
+                
                 messagebox.showinfo("Configurações", "Configurações salvas com sucesso!")
                 win.destroy()
             else:
