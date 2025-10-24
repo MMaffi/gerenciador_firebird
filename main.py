@@ -429,14 +429,13 @@ class GerenciadorFirebirdApp(tk.Tk):
         )
         self.status_label.pack()
 
-        # Barra de progresso - Modo determinate para controle preciso
+        # Barra de progresso
         self.progress = ttk.Progressbar(
             dashboard_frame, 
             mode="determinate", 
             length=500
         )
         self.progress.pack(pady=5)
-        # Inicialmente vazia (sem quadradinho verde)
         self.progress["value"] = 0
 
         # Log
@@ -496,7 +495,7 @@ class GerenciadorFirebirdApp(tk.Tk):
         self.disk_status = ttk.Label(disk_frame, text="🔄 Calculando espaço...")
         self.disk_status.pack(anchor="w")
         
-        # Frame principal - Gerenciador de Processos
+        # Frame principal
         main_frame = ttk.Frame(monitor_frame)
         main_frame.pack(fill="both", expand=True, padx=10, pady=5)
         
@@ -701,7 +700,7 @@ class GerenciadorFirebirdApp(tk.Tk):
             self.process_status_label.config(text=f"❌ Erro ao carregar processos: {e}")
 
     def _create_scheduler_tab(self):
-        """Cria aba de agendamento reformulada"""
+        """Cria aba de agendamento"""
         sched_frame = ttk.Frame(self.notebook)
         self.notebook.add(sched_frame, text="Agendador")
         
@@ -798,7 +797,7 @@ class GerenciadorFirebirdApp(tk.Tk):
         self.load_schedules()
 
     def _open_new_schedule_window(self):
-        """Abre janela para criar novo agendamento"""
+        """janela para novo agendamento"""
         win = tk.Toplevel(self)
         win.title("Novo Agendamento")
         win.geometry("500x550")
@@ -823,7 +822,6 @@ class GerenciadorFirebirdApp(tk.Tk):
         
         ttk.Label(main_frame, text="Novo Agendamento", font=("Arial", 14, "bold")).pack(pady=(0, 20))
         
-        # Campos do formulário
         # Nome do agendamento
         ttk.Label(main_frame, text="Nome do agendamento:*", font=("Arial", 9, "bold")).pack(anchor="w", pady=(5, 2))
         sched_name_var = tk.StringVar()
@@ -864,7 +862,7 @@ class GerenciadorFirebirdApp(tk.Tk):
         def validate_time_input(new_value):
             """Permite apenas até 2 dígitos numéricos"""
             if new_value == "":
-                return True  # permite apagar
+                return True
             if len(new_value) > 2:
                 return False
             return new_value.isdigit()
@@ -899,7 +897,7 @@ class GerenciadorFirebirdApp(tk.Tk):
         )
         minute_entry.pack(side="left")
         
-        # Tooltip com formato esperado
+        # Tooltip
         time_tooltip = ttk.Label(main_frame, text="Formato: HH:MM (24 horas). Ex: 14:30, 02:00, 23:45", 
                                 foreground="gray", font=("Arial", 8))
         time_tooltip.pack(anchor="w", pady=(0, 10))
@@ -916,7 +914,7 @@ class GerenciadorFirebirdApp(tk.Tk):
         btn_frame.pack(fill="x", pady=20)
         
         def create_schedule():
-            """Cria o novo agendamento - COM VALIDAÇÃO APENAS NO SALVAMENTO"""
+            """Cria o novo agendamento"""
             # Validações
             if not sched_name_var.get().strip():
                 messagebox.showerror("Erro", "Digite um nome para o agendamento.")
@@ -1021,23 +1019,22 @@ class GerenciadorFirebirdApp(tk.Tk):
         # Configurar opções iniciais de frequência
         self._update_new_schedule_freq_options(freq_options_frame, sched_freq_var.get())
         
-        # Bind para atualizar opções quando a frequência mudar
         freq_combo.bind('<<ComboboxSelected>>', 
                         lambda e: self._update_new_schedule_freq_options(freq_options_frame, sched_freq_var.get()))
 
     def _update_new_schedule_freq_options(self, options_frame, frequency):
-        """Atualiza opções de frequência na janela de novo agendamento"""
+        """Atualiza opções de frequência"""
         # Limpa frame anterior
         for widget in options_frame.winfo_children():
             widget.destroy()
         
         if frequency == "Diário":
-            # Para diário, não precisa de opções adicionais
+            # Para diário
             ttk.Label(options_frame, text="O backup será executado diariamente no horário selecionado.",
                      foreground="gray", font=("Arial", 9)).pack(anchor="w")
             
         elif frequency == "Semanal":
-            # Para semanal, selecionar dia da semana
+            # Para semanal
             ttk.Label(options_frame, text="Dia da semana:*", font=("Arial", 9, "bold")).pack(anchor="w", pady=(5, 2))
             self.sched_weekday_var = tk.StringVar(value="Segunda")
             weekday_combo = ttk.Combobox(options_frame, textvariable=self.sched_weekday_var,
@@ -1046,7 +1043,7 @@ class GerenciadorFirebirdApp(tk.Tk):
             weekday_combo.pack(anchor="w", pady=(0, 5))
             
         elif frequency == "Mensal":
-            # Para mensal, selecionar dia do mês
+            # Para mensal
             ttk.Label(options_frame, text="Dia do mês:*", font=("Arial", 9, "bold")).pack(anchor="w", pady=(5, 2))
             self.sched_monthday_var = tk.StringVar(value="1")
             monthday_combo = ttk.Combobox(options_frame, textvariable=self.sched_monthday_var,
@@ -1278,7 +1275,6 @@ class GerenciadorFirebirdApp(tk.Tk):
         self.destroy()
 
     def on_close(self):
-        """Lida com o fechamento da janela"""
         if self.conf.get("minimize_to_tray", True):
             self.minimize_to_tray()
         else:
@@ -1303,7 +1299,7 @@ class GerenciadorFirebirdApp(tk.Tk):
                 schedule.run_pending()
             except Exception as e:
                 self.log(f"❌ Erro no agendador: {e}", "error")
-            time.sleep(60)  # Verifica a cada minuto
+            time.sleep(60)
 
     def stop_scheduler(self):
         """Para o agendador"""
@@ -1330,7 +1326,6 @@ class GerenciadorFirebirdApp(tk.Tk):
             self.log(f"❌ Erro ao configurar inicialização com Windows: {e}", "error")
 
     def add_to_startup(self):
-        """Adiciona o programa à inicialização do Windows"""
         try:
             # Usando winshell
             startup_folder = winshell.startup()
@@ -1355,7 +1350,6 @@ class GerenciadorFirebirdApp(tk.Tk):
             return self._add_to_startup_registry()
 
     def _add_to_startup_registry(self):
-        """Método alternativo usando registro do Windows"""
         try:
             script_path = sys.executable if getattr(sys, 'frozen', False) else sys.argv[0]
             script_path = f'"{script_path}"'
@@ -1376,7 +1370,6 @@ class GerenciadorFirebirdApp(tk.Tk):
     def remove_from_startup(self):
         """Remove o programa da inicialização do Windows"""
         try:
-            # Remove atalho da pasta Inicializar
             startup_folder = winshell.startup()
             shortcut_path = os.path.join(startup_folder, "Gerenciador Firebird.lnk")
             
@@ -1504,7 +1497,7 @@ class GerenciadorFirebirdApp(tk.Tk):
             self.task_running = True
             self.disable_buttons()
             
-            # Inicia a animação da barra de progresso - modo determinate com pulso
+            # Inicia a animação da barra de progresso
             self.progress["mode"] = "indeterminate"
             self.progress.start(10)
             
@@ -1556,7 +1549,6 @@ class GerenciadorFirebirdApp(tk.Tk):
                 self.log(error_msg, "error")
                 self.set_status("❌ Falha inesperada.", "red")
             finally:
-                # Para a animação e volta para modo determinate vazio
                 self.progress.stop()
                 self.progress["mode"] = "determinate"
                 self.progress["value"] = 0
@@ -1900,7 +1892,6 @@ class GerenciadorFirebirdApp(tk.Tk):
             self.log(f"📦 Iniciando extração do arquivo ZIP: {zip_path.name}", "info")
             self._update_progress(f"Analisando arquivo: {zip_path.name}")
             
-            # Mostra informações do arquivo ZIP
             try:
                 with zipfile.ZipFile(bkp, "r") as z:
                     file_list = z.namelist()
@@ -1913,7 +1904,7 @@ class GerenciadorFirebirdApp(tk.Tk):
             self._update_progress("Iniciando extração...")
             
             def extract_with_progress():
-                """Extrai arquivo ZIP com feedback de progresso"""
+                """Extrai arquivo ZIP"""
                 try:
                     with zipfile.ZipFile(bkp, "r") as z:
                         total_files = len(z.filelist)
@@ -1998,7 +1989,7 @@ class GerenciadorFirebirdApp(tk.Tk):
         cancel_btn.pack(pady=5)
 
     def _update_progress(self, message):
-        """Atualiza mensagem de progresso"""
+        """Atualiza mensagem"""
         if hasattr(self, 'progress_label') and hasattr(self, 'progress_win'):
             self.progress_label.config(text=message)
             self.progress_win.update_idletasks()
@@ -2133,7 +2124,6 @@ class GerenciadorFirebirdApp(tk.Tk):
         self.set_status("Executando verificação completa...", "blue")
         
         def after_verify():
-            """Callback após verificação"""
             self._run_verify_with_output(cmd, db)
         
         self.run_command(cmd, on_finish=after_verify)
@@ -2185,7 +2175,6 @@ class GerenciadorFirebirdApp(tk.Tk):
 
     def _analyze_verify_output(self, output_text):
         """Analisa erros"""
-        # Erros que podem ser corrigidos com gfix
         correctable_patterns = [
             "corrupt",
             "damage",
@@ -2434,7 +2423,6 @@ class GerenciadorFirebirdApp(tk.Tk):
             # Cria backup de segurança antes da correção
             self._create_safety_backup(db, lambda: self._execute_advanced_repair(db, do_sweep))
         else:
-            # Confirmação para prosseguir sem backup
             if messagebox.askyesno(
                 "Confirmação de Risco",
                 "⚠️ ALTO RISCO ⚠️\n\n"
@@ -2454,17 +2442,14 @@ class GerenciadorFirebirdApp(tk.Tk):
         self.log("🛠️ Iniciando correção avançada do banco...", "warning")
         self.set_status("Executando correção avançada...", "orange")
         
-        # Sequência de comandos de correção
         repair_commands = []
-        
-        # Adiciona sweep apenas se solicitado
+
         if do_sweep:
             repair_commands.append({
                 "name": "Limpeza de registros antigos",
                 "cmd": [gfix, "-sweep", db_path, "-user", self.conf["firebird_user"], "-pass", self.conf["firebird_password"]]
             })
         
-        # Comandos principais de correção
         repair_commands.extend([
             {
                 "name": "Validação completa",
@@ -2489,8 +2474,7 @@ class GerenciadorFirebirdApp(tk.Tk):
             else:
                 self.log("✅ Correção avançada concluída!", "success")
                 self.set_status("Correção avançada concluída", "green")
-                
-                # Executa verificação final
+
                 verify_cmd = [
                     gfix, "-v", "-full", 
                     db_path, 
@@ -2512,7 +2496,7 @@ class GerenciadorFirebirdApp(tk.Tk):
         run_next_command()
 
     def sweep_database(self):
-        """Executa apenas a limpeza (sweep) do banco de dados"""
+        """Executa a limpeza (sweep) do banco de dados"""
         gfix = self.conf.get("gfix_path") or find_executable("gfix.exe")
         if not gfix:
             messagebox.showerror("Erro", "gfix.exe não encontrado. Configure o caminho nas configurações.")
@@ -2528,7 +2512,6 @@ class GerenciadorFirebirdApp(tk.Tk):
         if not db:
             return
 
-        # Pergunta confirmação
         if not messagebox.askyesno(
             "Limpeza do Banco",
             "🧹 LIMPEZA DO BANCO DE DADOS (SWEEP)\n\n"
@@ -2541,7 +2524,6 @@ class GerenciadorFirebirdApp(tk.Tk):
         ):
             return
 
-        # Comando de sweep
         cmd = [
             gfix, "-sweep",
             db,
@@ -2629,7 +2611,6 @@ class GerenciadorFirebirdApp(tk.Tk):
             messagebox.showwarning("Aviso", "Selecione pelo menos um processo para finalizar.")
             return
         
-        # Confirmação
         selected_count = len(selection)
         if not messagebox.askyesno(
             "Confirmação",
@@ -2686,7 +2667,6 @@ class GerenciadorFirebirdApp(tk.Tk):
         
         self.after(1000, self._refresh_all_processes)
         
-        # Log
         self.log(f"🔚 Finalização concluída: {killed_count} sucesso(s), {failed_count} falha(s)", 
                 "success" if failed_count == 0 else "warning")
 
@@ -2734,7 +2714,7 @@ class GerenciadorFirebirdApp(tk.Tk):
             messagebox.showerror("Erro", f"Erro ao acessar processo {pid}:\n{e}")
 
     def auto_refresh_monitor(self):
-        """Atualização automática do monitor"""
+        """Atualização automática"""
         if self.conf.get("auto_monitor", True):
             self.refresh_monitor()
             interval = int(self.conf.get("monitor_interval", 30)) * 1000
@@ -2742,26 +2722,21 @@ class GerenciadorFirebirdApp(tk.Tk):
 
     # ---------- AGENDAMENTO ----------
     def load_schedules(self):
-        """Carrega agendamentos salvos - ATUALIZADO"""
+        """Carrega agendamentos salvos"""
         try:
-            # Limpa a lista visual
             for item in self.schedules_tree.get_children():
                 self.schedules_tree.delete(item)
             
-            # Limpa agendamentos existentes
             schedule.clear()
             
-            # Carrega da configuração
             scheduled_backups = self.conf.get("scheduled_backups", [])
             
             for schedule_data in scheduled_backups:
                 # Formata horário
                 time_str = f"{schedule_data['hour']:02d}:{schedule_data['minute']:02d}"
                 
-                # Calcula próxima execução
                 next_run = self._calculate_next_run(schedule_data)
                 
-                # Adiciona à lista visual
                 self.schedules_tree.insert("", "end", values=(
                     schedule_data["name"],
                     Path(schedule_data["database"]).name,
@@ -2771,7 +2746,6 @@ class GerenciadorFirebirdApp(tk.Tk):
                     next_run
                 ))
                 
-                # Configura o agendamento
                 self._setup_schedule(schedule_data)
             
             status_text = f"✅ {len(scheduled_backups)} agendamento(s) carregado(s)"
@@ -2795,7 +2769,6 @@ class GerenciadorFirebirdApp(tk.Tk):
             minute = schedule_data["minute"]
             
             if frequency == "Diário":
-                # Próxima execução hoje ou amanhã
                 next_run = datetime(now.year, now.month, now.day, hour, minute)
                 if next_run <= now:
                     next_run += timedelta(days=1)
@@ -2810,24 +2783,22 @@ class GerenciadorFirebirdApp(tk.Tk):
                 current_weekday = now.weekday()
                 
                 days_ahead = target_weekday - current_weekday
-                if days_ahead <= 0:  # Se já passou esta semana
+                if days_ahead <= 0:
                     days_ahead += 7
                     
                 next_run = datetime(now.year, now.month, now.day, hour, minute) + timedelta(days=days_ahead)
                 
             elif frequency == "Mensal":
                 target_day = int(schedule_data.get("monthday", 1))
-                # Próxima execução este mês ou próximo mês
                 try:
                     next_run = datetime(now.year, now.month, target_day, hour, minute)
                     if next_run <= now:
-                        # Vai para próximo mês
                         if now.month == 12:
                             next_run = datetime(now.year + 1, 1, target_day, hour, minute)
                         else:
                             next_run = datetime(now.year, now.month + 1, target_day, hour, minute)
                 except ValueError:
-                    # Dia inválido para o mês (ex: 31 de fevereiro), usa último dia do mês
+                    # Dia inválido para o mês, usa último dia do mês
                     if now.month == 12:
                         next_month = datetime(now.year + 1, 1, 1)
                     else:
@@ -2849,7 +2820,6 @@ class GerenciadorFirebirdApp(tk.Tk):
             # Remove agendamentos existentes com o mesmo nome
             schedule.clear(schedule_data["name"])
             
-            # Configura o agendamento baseado na frequência
             job = None
             time_str = f"{schedule_data['hour']:02d}:{schedule_data['minute']:02d}"
             
@@ -2883,7 +2853,6 @@ class GerenciadorFirebirdApp(tk.Tk):
                     ).tag(schedule_data["name"])
             
             elif schedule_data["frequency"] == "Mensal":
-                # Agenda para dia específico do mês
                 day = int(schedule_data.get("monthday", 1))
                 job = schedule.every(30).days.at(time_str).do(
                     self.execute_scheduled_backup,
@@ -2913,7 +2882,6 @@ class GerenciadorFirebirdApp(tk.Tk):
         values = self.schedules_tree.item(item, "values")
         schedule_name = values[0]
         
-        # Encontra os dados do agendamento
         schedule_data = None
         for sched in self.conf.get("scheduled_backups", []):
             if sched["name"] == schedule_name:
@@ -2983,7 +2951,7 @@ class GerenciadorFirebirdApp(tk.Tk):
         time_frame = ttk.Frame(main_frame)
         time_frame.pack(anchor="w", pady=(0, 10))
         
-        # Função de validação para aceitar apenas até 2 dígitos numéricos
+        # Função de validação
         def validate_time_input(new_value):
             if new_value == "":
                 return True
@@ -3087,7 +3055,6 @@ class GerenciadorFirebirdApp(tk.Tk):
             
             frequency = edit_freq_var.get()
             
-            # Atualiza os dados
             schedule_data.update({
                 "name": edit_name_var.get().strip(),
                 "database": edit_db_var.get().strip(),
@@ -3097,7 +3064,6 @@ class GerenciadorFirebirdApp(tk.Tk):
                 "compress": edit_compress_var.get()
             })
             
-            # Opções específicas
             if frequency == "Semanal":
                 if hasattr(self, 'sched_weekday_var'):
                     schedule_data["weekday"] = self.sched_weekday_var.get()
@@ -3126,10 +3092,8 @@ class GerenciadorFirebirdApp(tk.Tk):
         ttk.Button(btn_frame, text="❌ Cancelar", 
                 command=cancel_edit, cursor="hand2").pack(side="right", padx=5)
         
-        # Configura opções iniciais de frequência
         self._update_edit_schedule_freq_options(edit_freq_options_frame, edit_freq_var.get(), schedule_data)
         
-        # Atualiza opções quando a frequência mudar
         freq_combo.bind(
             '<<ComboboxSelected>>',
             lambda e: self._update_edit_schedule_freq_options(edit_freq_options_frame, edit_freq_var.get(), schedule_data)
@@ -3137,17 +3101,14 @@ class GerenciadorFirebirdApp(tk.Tk):
 
     def _update_edit_schedule_freq_options(self, options_frame, frequency, schedule_data):
         """Atualiza opções de frequência na janela de edição"""
-        # Limpa frame anterior
         for widget in options_frame.winfo_children():
             widget.destroy()
         
         if frequency == "Diário":
-            # Para diário, não precisa de opções adicionais
             ttk.Label(options_frame, text="O backup será executado diariamente no horário selecionado.",
                      foreground="gray", font=("Arial", 9)).pack(anchor="w")
             
         elif frequency == "Semanal":
-            # Para semanal, selecionar dia da semana
             ttk.Label(options_frame, text="Dia da semana:*", font=("Arial", 9, "bold")).pack(anchor="w", pady=(5, 2))
             self.sched_weekday_var = tk.StringVar(value=schedule_data.get("weekday", "Segunda"))
             weekday_combo = ttk.Combobox(options_frame, textvariable=self.sched_weekday_var,
@@ -3156,7 +3117,6 @@ class GerenciadorFirebirdApp(tk.Tk):
             weekday_combo.pack(anchor="w", pady=(0, 5))
             
         elif frequency == "Mensal":
-            # Para mensal, selecionar dia do mês
             ttk.Label(options_frame, text="Dia do mês:*", font=("Arial", 9, "bold")).pack(anchor="w", pady=(5, 2))
             self.sched_monthday_var = tk.StringVar(value=schedule_data.get("monthday", "1"))
             monthday_combo = ttk.Combobox(options_frame, textvariable=self.sched_monthday_var,
@@ -3171,7 +3131,6 @@ class GerenciadorFirebirdApp(tk.Tk):
             messagebox.showwarning("Aviso", "Selecione um agendamento para remover.")
             return
         
-        # Confirmação de exclusão
         selected_names = [self.schedules_tree.item(item, "values")[0] for item in selection]
         names_text = "\n".join([f"• {name}" for name in selected_names])
         
@@ -3220,7 +3179,7 @@ class GerenciadorFirebirdApp(tk.Tk):
         
         self.log("🔧 Iniciando otimização do banco...", "info")
         
-        # Comandos de otimização - APENAS OS ESSENCIAIS
+        # Comandos de otimização
         commands = [
             [gfix, "-sweep", db, "-user", self.conf["firebird_user"], "-pass", self.conf["firebird_password"]],
             [gfix, "-validate", "-full", db, "-user", self.conf["firebird_user"], "-pass", self.conf["firebird_password"]],
@@ -3287,7 +3246,6 @@ class GerenciadorFirebirdApp(tk.Tk):
         
         def after_restore():
             self.log(f"✅ Migração concluída: {migrated_file}", "success")
-            # Limpa backup temporário
             try:
                 backup_file.unlink()
             except:
@@ -3297,7 +3255,7 @@ class GerenciadorFirebirdApp(tk.Tk):
 
     # ---------- RELATÓRIOS ----------
     def generate_gstat_report(self):
-        """Gera relatório detalhado do banco usando gstat.exe"""
+        """Gera relatório detalhado do banco"""
         gstat = self.conf.get("gstat_path") or find_executable("gstat.exe")
         if not gstat:
             messagebox.showerror("Erro", "gstat.exe não encontrado. Configure o caminho nas configurações.")
@@ -3511,7 +3469,6 @@ class GerenciadorFirebirdApp(tk.Tk):
             
             for partition in partitions:
                 try:
-                    # Ignora partições de CD/DVD e outras mídias removíveis sem disco
                     if partition.fstype and partition.device:
                         usage = psutil.disk_usage(partition.mountpoint)
                         
@@ -3552,7 +3509,6 @@ class GerenciadorFirebirdApp(tk.Tk):
                     report_lines.append(f"   Erro: {str(e)}")
                     report_lines.append("")
             
-            # Adiciona resumo
             accessible_partitions = [p for p in partitions if not p.fstype in ['cdrom', ''] and not p.device.startswith('\\\\')]
             total_disks = len(accessible_partitions)
             
@@ -3567,7 +3523,6 @@ class GerenciadorFirebirdApp(tk.Tk):
             with open(report_path, 'w', encoding='utf-8') as f:
                 f.write('\n'.join(report_lines))
             
-            # Mostra relatório em janela personalizada
             self._show_report_window("Relatório de Espaço em Disco", report_lines, report_path)
             
             self.log("💾 Relatório de espaço em disco gerado com sucesso", "success")
@@ -3816,7 +3771,7 @@ class GerenciadorFirebirdApp(tk.Tk):
         tray_var = tk.BooleanVar(value=self.conf.get("minimize_to_tray", True))
         ttk.Checkbutton(system_frame, variable=tray_var).grid(row=3, column=1, sticky="w", padx=5)
 
-        # Iniciar com Windows (MANTIDO)
+        # Iniciar com Windows
         ttk.Label(system_frame, text="Iniciar com Windows:").grid(row=4, column=0, sticky="w", pady=8)
         startup_var = tk.BooleanVar(value=self.conf.get("start_with_windows", False))
         startup_cb = ttk.Checkbutton(system_frame, variable=startup_var, 
