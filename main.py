@@ -144,7 +144,6 @@ def load_config():
         "auto_monitor": True,
         "monitor_interval": 30,
         "minimize_to_tray": True,
-        "start_minimized": False,
         "start_with_windows": False,
         "scheduled_backups": [],
         "log_retention_days": 30
@@ -304,10 +303,6 @@ class GerenciadorFirebirdApp(tk.Tk):
                 self.log("🔄 Sincronizando configuração de inicialização com Windows...", "info")
                 self.apply_startup_setting(current_startup_setting)
             
-            # Inicia minimizado se configurado
-            if self.conf.get("start_minimized", False):
-                self.after(1000, self.minimize_to_tray)
-            
             self.logger.info("Gerenciador Firebird iniciado com sucesso")
             
         except Exception as e:
@@ -434,13 +429,15 @@ class GerenciadorFirebirdApp(tk.Tk):
         )
         self.status_label.pack()
 
-        # Barra de progresso
+        # Barra de progresso - Modo determinate para controle preciso
         self.progress = ttk.Progressbar(
             dashboard_frame, 
-            mode="indeterminate", 
+            mode="determinate", 
             length=500
         )
         self.progress.pack(pady=5)
+        # Inicialmente vazia (sem quadradinho verde)
+        self.progress["value"] = 0
 
         # Log
         log_frame = ttk.LabelFrame(dashboard_frame, text="Log de Execução", padding=10)
@@ -1347,11 +1344,6 @@ class GerenciadorFirebirdApp(tk.Tk):
             shortcut.Targetpath = script_path
             shortcut.WorkingDirectory = os.path.dirname(script_path)
             shortcut.Description = "Gerenciador Firebird"
-            
-            # Adiciona argumento para iniciar minimizado se configurado
-            if self.conf.get("start_minimized", False):
-                shortcut.Arguments = "--minimized"
-            
             shortcut.save()
             
             self.log("✅ Programa adicionado à inicialização do Windows", "success")
@@ -1366,12 +1358,7 @@ class GerenciadorFirebirdApp(tk.Tk):
         """Método alternativo usando registro do Windows"""
         try:
             script_path = sys.executable if getattr(sys, 'frozen', False) else sys.argv[0]
-            
-            # Adiciona argumento para iniciar minimizado se configurado
-            if self.conf.get("start_minimized", False):
-                script_path = f'"{script_path}" --minimized'
-            else:
-                script_path = f'"{script_path}"'
+            script_path = f'"{script_path}"'
             
             key = winreg.HKEY_CURRENT_USER
             subkey = r"Software\Microsoft\Windows\CurrentVersion\Run"
@@ -1516,7 +1503,11 @@ class GerenciadorFirebirdApp(tk.Tk):
         def worker():
             self.task_running = True
             self.disable_buttons()
+            
+            # Inicia a animação da barra de progresso - modo determinate com pulso
+            self.progress["mode"] = "indeterminate"
             self.progress.start(10)
+            
             self.set_status("Executando operação...", "blue")
 
             try:
@@ -1565,7 +1556,11 @@ class GerenciadorFirebirdApp(tk.Tk):
                 self.log(error_msg, "error")
                 self.set_status("❌ Falha inesperada.", "red")
             finally:
+                # Para a animação e volta para modo determinate vazio
                 self.progress.stop()
+                self.progress["mode"] = "determinate"
+                self.progress["value"] = 0
+                
                 self.enable_buttons()
                 self.task_running = False
                 if on_finish:
@@ -3718,7 +3713,7 @@ class GerenciadorFirebirdApp(tk.Tk):
         """Janela de configurações"""
         win = tk.Toplevel(self)
         win.title("Configurações do Sistema")
-        win.geometry("500x750")
+        win.geometry("500x650")
         win.resizable(False, False)
         win.transient(self)
         win.grab_set()
@@ -3726,7 +3721,7 @@ class GerenciadorFirebirdApp(tk.Tk):
         # Centraliza
         self.update_idletasks()
         x = self.winfo_x() + (self.winfo_width() // 2) - 250
-        y = self.winfo_y() + (self.winfo_height() // 2) - 350
+        y = self.winfo_y() + (self.winfo_height() // 2) - 325
         win.geometry(f"+{x}+{y}")
 
         # Ícone
@@ -3821,16 +3816,12 @@ class GerenciadorFirebirdApp(tk.Tk):
         tray_var = tk.BooleanVar(value=self.conf.get("minimize_to_tray", True))
         ttk.Checkbutton(system_frame, variable=tray_var).grid(row=3, column=1, sticky="w", padx=5)
 
-        ttk.Label(system_frame, text="Iniciar minimizado:").grid(row=4, column=0, sticky="w", pady=8)
-        start_min_var = tk.BooleanVar(value=self.conf.get("start_minimized", False))
-        ttk.Checkbutton(system_frame, variable=start_min_var).grid(row=4, column=1, sticky="w", padx=5)
-
-        # Iniciar com Windows
-        ttk.Label(system_frame, text="Iniciar com Windows:").grid(row=5, column=0, sticky="w", pady=8)
+        # Iniciar com Windows (MANTIDO)
+        ttk.Label(system_frame, text="Iniciar com Windows:").grid(row=4, column=0, sticky="w", pady=8)
         startup_var = tk.BooleanVar(value=self.conf.get("start_with_windows", False))
         startup_cb = ttk.Checkbutton(system_frame, variable=startup_var, 
                                     command=lambda: self.toggle_startup(startup_var.get()))
-        startup_cb.grid(row=5, column=1, sticky="w", padx=5)
+        startup_cb.grid(row=4, column=1, sticky="w", padx=5)
 
         # Botões
         btn_frame = ttk.Frame(win)
@@ -3851,7 +3842,6 @@ class GerenciadorFirebirdApp(tk.Tk):
                 "auto_monitor": monitor_var.get(),
                 "monitor_interval": interval_var.get(),
                 "minimize_to_tray": tray_var.get(),
-                "start_minimized": start_min_var.get(),
                 "start_with_windows": startup_var.get(),
                 "log_retention_days": log_retention_var.get()
             })
