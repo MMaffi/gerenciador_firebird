@@ -144,7 +144,6 @@ def load_config():
         "auto_monitor": True,
         "monitor_interval": 30,
         "minimize_to_tray": True,
-        "start_minimized": False,
         "start_with_windows": False,
         "scheduled_backups": [],
         "log_retention_days": 30
@@ -304,10 +303,6 @@ class GerenciadorFirebirdApp(tk.Tk):
                 self.log("🔄 Sincronizando configuração de inicialização com Windows...", "info")
                 self.apply_startup_setting(current_startup_setting)
             
-            # Inicia minimizado se configurado
-            if self.conf.get("start_minimized", False):
-                self.after(1000, self.minimize_to_tray)
-            
             self.logger.info("Gerenciador Firebird iniciado com sucesso")
             
         except Exception as e:
@@ -437,10 +432,11 @@ class GerenciadorFirebirdApp(tk.Tk):
         # Barra de progresso
         self.progress = ttk.Progressbar(
             dashboard_frame, 
-            mode="indeterminate", 
+            mode="determinate", 
             length=500
         )
         self.progress.pack(pady=5)
+        self.progress["value"] = 0
 
         # Log
         log_frame = ttk.LabelFrame(dashboard_frame, text="Log de Execução", padding=10)
@@ -499,7 +495,7 @@ class GerenciadorFirebirdApp(tk.Tk):
         self.disk_status = ttk.Label(disk_frame, text="🔄 Calculando espaço...")
         self.disk_status.pack(anchor="w")
         
-        # Frame principal - Gerenciador de Processos
+        # Frame principal
         main_frame = ttk.Frame(monitor_frame)
         main_frame.pack(fill="both", expand=True, padx=10, pady=5)
         
@@ -708,81 +704,361 @@ class GerenciadorFirebirdApp(tk.Tk):
         sched_frame = ttk.Frame(self.notebook)
         self.notebook.add(sched_frame, text="Agendador")
         
-        # Formulário de agendamento
-        form_frame = ttk.LabelFrame(sched_frame, text="Novo Agendamento", padding=15)
-        form_frame.pack(fill="x", padx=10, pady=10)
+        # Frame principal com grid
+        main_frame = ttk.Frame(sched_frame, padding=10)
+        main_frame.pack(fill="both", expand=True, padx=10, pady=10)
         
-        # Banco de dados
-        ttk.Label(form_frame, text="Banco de dados:").grid(row=0, column=0, sticky="w", pady=8)
-        self.sched_db_var = tk.StringVar()
-        self.sched_db_entry = ttk.Entry(form_frame, textvariable=self.sched_db_var, width=40)
-        self.sched_db_entry.grid(row=0, column=1, padx=5)
-        ttk.Button(form_frame, text="...", width=3, command=self.pick_sched_db).grid(row=0, column=2)
+        # Frame de controles
+        controls_frame = ttk.Frame(main_frame)
+        controls_frame.pack(fill="x", pady=(0, 10))
         
-        # Nome do agendamento
-        ttk.Label(form_frame, text="Nome do agendamento:").grid(row=1, column=0, sticky="w", pady=8)
-        self.sched_name_var = tk.StringVar()
-        ttk.Entry(form_frame, textvariable=self.sched_name_var, width=40).grid(row=1, column=1, padx=5)
+        # Botão para adicionar novo agendamento
+        add_btn = ttk.Button(
+            controls_frame,
+            text="➕ Novo Agendamento",
+            cursor="hand2",
+            command=self._open_new_schedule_window,
+            width=25
+        )
+        add_btn.pack(side="left", padx=5)
         
-        # Frequência
-        ttk.Label(form_frame, text="Frequência:").grid(row=2, column=0, sticky="w", pady=8)
-        self.sched_freq_var = tk.StringVar(value="Diário")
-        freq_combo = ttk.Combobox(form_frame, textvariable=self.sched_freq_var, 
-                                 values=["Diário", "Semanal", "Mensal"], state="readonly")
-        freq_combo.grid(row=2, column=1, padx=5, sticky="w")
+        # Botão editar
+        edit_btn = ttk.Button(
+            controls_frame,
+            text="✏️ Editar Selecionado",
+            cursor="hand2",
+            command=self.edit_schedule,
+            width=25
+        )
+        edit_btn.pack(side="left", padx=5)
         
-        # Horário
-        ttk.Label(form_frame, text="Horário (HH:MM):").grid(row=3, column=0, sticky="w", pady=8)
-        self.sched_time_var = tk.StringVar(value="02:00")
-        ttk.Entry(form_frame, textvariable=self.sched_time_var, width=10).grid(row=3, column=1, padx=5, sticky="w")
+        # Botão excluir
+        delete_btn = ttk.Button(
+            controls_frame,
+            text="🗑️ Excluir Selecionado",
+            cursor="hand2",
+            command=self.remove_schedule,
+            width=25
+        )
+        delete_btn.pack(side="left", padx=5)
         
-        # Compactar backup
-        ttk.Label(form_frame, text="Compactar backup:").grid(row=4, column=0, sticky="w", pady=8)
-        self.sched_compress_var = tk.BooleanVar(value=True)
-        ttk.Checkbutton(form_frame, variable=self.sched_compress_var).grid(row=4, column=1, sticky="w", padx=5)
-        
-        # Botão de agendamento
-        ttk.Button(form_frame, text="➕ Agendar Backup", 
-                  cursor="hand2",
-                  command=self.schedule_backup).grid(row=5, column=1, pady=15, sticky="w")
+        # Botão recarregar
+        reload_btn = ttk.Button(
+            controls_frame,
+            text="🔄 Recarregar",
+            cursor="hand2",
+            command=self.load_schedules,
+            width=25
+        )
+        reload_btn.pack(side="left", padx=5)
         
         # Lista de agendamentos
-        list_frame = ttk.LabelFrame(sched_frame, text="Agendamentos Ativos", padding=10)
-        list_frame.pack(fill="both", expand=True, padx=10, pady=10)
+        list_frame = ttk.LabelFrame(main_frame, text="Agendamentos Ativos", padding=10)
+        list_frame.pack(fill="both", expand=True)
         
-        self.schedules_tree = ttk.Treeview(list_frame, columns=("Nome", "Banco", "Frequência", "Horário", "Compactar"), show="headings")
+        # Treeview para agendamentos
+        self.schedules_tree = ttk.Treeview(
+            list_frame, 
+            columns=("Nome", "Banco", "Frequência", "Horário", "Compactar", "Próxima Execução"), 
+            show="headings",
+            height=12
+        )
+        
+        # Configurar cabeçalhos
         self.schedules_tree.heading("Nome", text="Nome")
         self.schedules_tree.heading("Banco", text="Banco de Dados")
         self.schedules_tree.heading("Frequência", text="Frequência")
         self.schedules_tree.heading("Horário", text="Horário")
         self.schedules_tree.heading("Compactar", text="Compactar")
+        self.schedules_tree.heading("Próxima Execução", text="Próxima Execução")
         
-        self.schedules_tree.column("Nome", width=120)
-        self.schedules_tree.column("Banco", width=150)
-        self.schedules_tree.column("Frequência", width=80)
-        self.schedules_tree.column("Horário", width=60)
-        self.schedules_tree.column("Compactar", width=60)
+        # Configurar colunas
+        self.schedules_tree.column("Nome", width=150)
+        self.schedules_tree.column("Banco", width=200)
+        self.schedules_tree.column("Frequência", width=100)
+        self.schedules_tree.column("Horário", width=80)
+        self.schedules_tree.column("Compactar", width=80)
+        self.schedules_tree.column("Próxima Execução", width=150)
         
-        scrollbar = ttk.Scrollbar(list_frame, orient="vertical", command=self.schedules_tree.yview)
-        self.schedules_tree.configure(yscrollcommand=scrollbar.set)
+        # Scrollbars
+        v_scrollbar = ttk.Scrollbar(list_frame, orient="vertical", command=self.schedules_tree.yview)
+        h_scrollbar = ttk.Scrollbar(list_frame, orient="horizontal", command=self.schedules_tree.xview)
+        self.schedules_tree.configure(yscrollcommand=v_scrollbar.set, xscrollcommand=h_scrollbar.set)
         
         self.schedules_tree.pack(side="left", fill="both", expand=True)
-        scrollbar.pack(side="right", fill="y")
+        v_scrollbar.pack(side="right", fill="y")
+        h_scrollbar.pack(side="bottom", fill="x")
         
-        # Botões de controle
-        control_frame = ttk.Frame(list_frame)
-        control_frame.pack(fill="x", pady=5)
-        
-        ttk.Button(control_frame, text="🗑️ Remover Selecionado",
-                  cursor="hand2", 
-                  command=self.remove_schedule).pack(pady=2)
-        
-        ttk.Button(control_frame, text="🔄 Recarregar Agendamentos",
-                  cursor="hand2",
-                  command=self.load_schedules).pack(pady=2)
+        # Status
+        self.schedule_status = ttk.Label(main_frame, text="Carregando agendamentos...", foreground="gray")
+        self.schedule_status.pack(pady=5)
         
         # Carrega agendamentos salvos
         self.load_schedules()
+
+    def _open_new_schedule_window(self):
+        """janela para novo agendamento"""
+        win = tk.Toplevel(self)
+        win.title("Novo Agendamento")
+        win.geometry("500x550")
+        win.resizable(False, False)
+        win.transient(self)
+        win.grab_set()
+        
+        # Centraliza
+        self.update_idletasks()
+        x = self.winfo_x() + (self.winfo_width() // 2) - 250
+        y = self.winfo_y() + (self.winfo_height() // 2) - 225
+        win.geometry(f"+{x}+{y}")
+        
+        # Ícone
+        icon_path = BASE_DIR / "images" / "icon.ico"
+        if icon_path.exists():
+            win.iconbitmap(str(icon_path))
+        
+        # Frame principal
+        main_frame = ttk.Frame(win, padding=20)
+        main_frame.pack(fill="both", expand=True)
+        
+        ttk.Label(main_frame, text="Novo Agendamento", font=("Arial", 14, "bold")).pack(pady=(0, 20))
+        
+        # Nome do agendamento
+        ttk.Label(main_frame, text="Nome do agendamento:*", font=("Arial", 9, "bold")).pack(anchor="w", pady=(5, 2))
+        sched_name_var = tk.StringVar()
+        sched_name_entry = ttk.Entry(main_frame, textvariable=sched_name_var, width=40, font=("Arial", 10))
+        sched_name_entry.pack(fill="x", pady=(0, 10))
+        sched_name_entry.focus()
+        
+        # Banco de dados
+        ttk.Label(main_frame, text="Banco de dados:*", font=("Arial", 9, "bold")).pack(anchor="w", pady=(5, 2))
+        sched_db_var = tk.StringVar()
+        db_frame = ttk.Frame(main_frame)
+        db_frame.pack(fill="x", pady=(0, 10))
+        sched_db_entry = ttk.Entry(db_frame, textvariable=sched_db_var, width=35, font=("Arial", 10))
+        sched_db_entry.pack(side="left", fill="x", expand=True)
+        ttk.Button(db_frame, text="📁", width=3, 
+                command=lambda: self._pick_schedule_db(sched_db_var)).pack(side="left", padx=5)
+        
+        # Frequência
+        ttk.Label(main_frame, text="Frequência:*", font=("Arial", 9, "bold")).pack(anchor="w", pady=(5, 2))
+        sched_freq_var = tk.StringVar(value="Diário")
+        freq_combo = ttk.Combobox(main_frame, textvariable=sched_freq_var, 
+                                values=["Diário", "Semanal", "Mensal"], 
+                                state="readonly", width=20, font=("Arial", 10))
+        freq_combo.pack(fill="x", pady=(0, 10))
+        
+        # Frame para opções específicas da frequência
+        freq_options_frame = ttk.Frame(main_frame)
+        freq_options_frame.pack(fill="x", pady=(0, 10))
+        
+        # Horário
+        ttk.Label(main_frame, text="Horário (HH:MM):*", font=("Arial", 9, "bold")).pack(anchor="w", pady=(5, 2))
+        
+        # Frame para o campo de horário
+        time_frame = ttk.Frame(main_frame)
+        time_frame.pack(anchor="w", pady=(0, 10))
+        
+        # Função de validação dos campos de hora/minuto
+        def validate_time_input(new_value):
+            """Permite apenas até 2 dígitos numéricos"""
+            if new_value == "":
+                return True
+            if len(new_value) > 2:
+                return False
+            return new_value.isdigit()
+        
+        vcmd = (self.register(validate_time_input), "%P")
+        
+        # Horas
+        hour_var = tk.StringVar(value="02")
+        hour_entry = ttk.Entry(
+            time_frame,
+            textvariable=hour_var,
+            width=3,
+            font=("Arial", 10),
+            justify="center",
+            validate="key",
+            validatecommand=vcmd
+        )
+        hour_entry.pack(side="left")
+        
+        ttk.Label(time_frame, text=":", font=("Arial", 10, "bold")).pack(side="left", padx=2)
+        
+        # Minutos
+        minute_var = tk.StringVar(value="00")
+        minute_entry = ttk.Entry(
+            time_frame,
+            textvariable=minute_var,
+            width=3,
+            font=("Arial", 10),
+            justify="center",
+            validate="key",
+            validatecommand=vcmd
+        )
+        minute_entry.pack(side="left")
+        
+        # Tooltip
+        time_tooltip = ttk.Label(main_frame, text="Formato: HH:MM (24 horas). Ex: 14:30, 02:00, 23:45", 
+                                foreground="gray", font=("Arial", 8))
+        time_tooltip.pack(anchor="w", pady=(0, 10))
+        
+        # Compactar backup
+        compress_frame = ttk.Frame(main_frame)
+        compress_frame.pack(fill="x", pady=10)
+        sched_compress_var = tk.BooleanVar(value=True)
+        ttk.Checkbutton(compress_frame, variable=sched_compress_var, 
+                        text="Compactar backup após gerar (recomendado)").pack(anchor="w")
+        
+        # Botões
+        btn_frame = ttk.Frame(main_frame)
+        btn_frame.pack(fill="x", pady=20)
+        
+        def create_schedule():
+            """Cria o novo agendamento"""
+            # Validações
+            if not sched_name_var.get().strip():
+                messagebox.showerror("Erro", "Digite um nome para o agendamento.")
+                sched_name_entry.focus()
+                return
+                
+            if not sched_db_var.get().strip():
+                messagebox.showerror("Erro", "Selecione um banco de dados.")
+                return
+                
+            hour_str = hour_var.get().strip()
+            minute_str = minute_var.get().strip()
+            
+            if not hour_str or not minute_str:
+                messagebox.showerror("Erro", "Preencha horas e minutos.")
+                hour_entry.focus()
+                return
+                
+            if not hour_str.isdigit() or not minute_str.isdigit():
+                messagebox.showerror("Erro", "Horas e minutos devem conter apenas números.")
+                hour_entry.focus()
+                return
+                
+            if len(hour_str) > 2 or len(minute_str) > 2:
+                messagebox.showerror("Erro", "Horas e minutos devem ter no máximo 2 dígitos.")
+                hour_entry.focus()
+                return
+                
+            try:
+                hours_int = int(hour_str)
+                minutes_int = int(minute_str)
+                
+                if not (0 <= hours_int <= 23):
+                    raise ValueError("Hora deve estar entre 00 e 23")
+                if not (0 <= minutes_int <= 59):
+                    raise ValueError("Minutos devem estar entre 00 e 59")
+                    
+            except ValueError as e:
+                messagebox.showerror("Erro", f"Horário inválido: {e}")
+                hour_entry.focus()
+                return
+            
+            # Formata para 2 dígitos
+            hour_final = f"{hours_int:02d}"
+            minute_final = f"{minutes_int:02d}"
+            
+            # Prepara dados do agendamento
+            schedule_data = {
+                "name": sched_name_var.get().strip(),
+                "database": sched_db_var.get().strip(),
+                "frequency": sched_freq_var.get(),
+                "hour": int(hour_final),
+                "minute": int(minute_final),
+                "compress": sched_compress_var.get()
+            }
+            
+            frequency = sched_freq_var.get()
+            if frequency == "Semanal":
+                if hasattr(self, 'sched_weekday_var'):
+                    schedule_data["weekday"] = self.sched_weekday_var.get()
+                else:
+                    messagebox.showerror("Erro", "Selecione um dia da semana para o agendamento semanal.")
+                    return
+            elif frequency == "Mensal":
+                if hasattr(self, 'sched_monthday_var'):
+                    schedule_data["monthday"] = self.sched_monthday_var.get()
+                else:
+                    messagebox.showerror("Erro", "Selecione um dia do mês para o agendamento mensal.")
+                    return
+            
+            # Adiciona à configuração
+            if "scheduled_backups" not in self.conf:
+                self.conf["scheduled_backups"] = []
+            
+            existing_names = [s["name"] for s in self.conf["scheduled_backups"]]
+            if schedule_data["name"] in existing_names:
+                messagebox.showerror("Erro", f"Já existe um agendamento com o nome '{schedule_data['name']}'.")
+                sched_name_entry.focus()
+                return
+            
+            self.conf["scheduled_backups"].append(schedule_data)
+            
+            if save_config(self.conf):
+                win.destroy()
+                self.load_schedules()
+                self.log(f"📅 Agendamento criado: {schedule_data['name']}", "success")
+                messagebox.showinfo("Sucesso", f"Agendamento '{schedule_data['name']}' criado com sucesso!")
+            else:
+                messagebox.showerror("Erro", "Erro ao salvar agendamento.")
+        
+        def cancel_creation():
+            win.destroy()
+        
+        ttk.Button(btn_frame, text="💾 Criar Agendamento", 
+                command=create_schedule,
+                cursor="hand2").pack(side="left", padx=5)
+        
+        ttk.Button(btn_frame, text="❌ Cancelar", 
+                command=cancel_creation,
+                cursor="hand2").pack(side="right", padx=5)
+        
+        # Configurar opções iniciais de frequência
+        self._update_new_schedule_freq_options(freq_options_frame, sched_freq_var.get())
+        
+        freq_combo.bind('<<ComboboxSelected>>', 
+                        lambda e: self._update_new_schedule_freq_options(freq_options_frame, sched_freq_var.get()))
+
+    def _update_new_schedule_freq_options(self, options_frame, frequency):
+        """Atualiza opções de frequência"""
+        # Limpa frame anterior
+        for widget in options_frame.winfo_children():
+            widget.destroy()
+        
+        if frequency == "Diário":
+            # Para diário
+            ttk.Label(options_frame, text="O backup será executado diariamente no horário selecionado.",
+                     foreground="gray", font=("Arial", 9)).pack(anchor="w")
+            
+        elif frequency == "Semanal":
+            # Para semanal
+            ttk.Label(options_frame, text="Dia da semana:*", font=("Arial", 9, "bold")).pack(anchor="w", pady=(5, 2))
+            self.sched_weekday_var = tk.StringVar(value="Segunda")
+            weekday_combo = ttk.Combobox(options_frame, textvariable=self.sched_weekday_var,
+                                       values=["Segunda", "Terça", "Quarta", "Quinta", "Sexta", "Sábado", "Domingo"],
+                                       state="readonly", width=15, font=("Arial", 10))
+            weekday_combo.pack(anchor="w", pady=(0, 5))
+            
+        elif frequency == "Mensal":
+            # Para mensal
+            ttk.Label(options_frame, text="Dia do mês:*", font=("Arial", 9, "bold")).pack(anchor="w", pady=(5, 2))
+            self.sched_monthday_var = tk.StringVar(value="1")
+            monthday_combo = ttk.Combobox(options_frame, textvariable=self.sched_monthday_var,
+                                        values=[str(i) for i in range(1, 32)], state="readonly", width=5, font=("Arial", 10))
+            monthday_combo.pack(anchor="w", pady=(0, 5))
+            ttk.Label(options_frame, text="(1-31)", foreground="gray", font=("Arial", 9)).pack(anchor="w")
+
+    def _pick_schedule_db(self, var):
+        """Seleciona banco para agendamento"""
+        db = filedialog.askopenfilename(
+            title="Selecione o banco para agendamento",
+            filetypes=[("Firebird Database", "*.fdb")]
+        )
+        if db:
+            var.set(db)
 
     def _create_tools_tab(self):
         """Cria aba de ferramentas avançadas"""
@@ -892,7 +1168,7 @@ class GerenciadorFirebirdApp(tk.Tk):
         footer_frame = tk.Frame(self, bg="#f5f5f5", relief="ridge", borderwidth=1)
         footer_frame.pack(side="bottom", fill="x")
         
-        APP_VERSION = "2025.10.23.0830"
+        APP_VERSION = "2025.10.27.0916"
 
         footer_left = tk.Label(
             footer_frame,
@@ -999,7 +1275,6 @@ class GerenciadorFirebirdApp(tk.Tk):
         self.destroy()
 
     def on_close(self):
-        """Lida com o fechamento da janela"""
         if self.conf.get("minimize_to_tray", True):
             self.minimize_to_tray()
         else:
@@ -1024,7 +1299,7 @@ class GerenciadorFirebirdApp(tk.Tk):
                 schedule.run_pending()
             except Exception as e:
                 self.log(f"❌ Erro no agendador: {e}", "error")
-            time.sleep(60)  # Verifica a cada minuto
+            time.sleep(60)
 
     def stop_scheduler(self):
         """Para o agendador"""
@@ -1051,7 +1326,6 @@ class GerenciadorFirebirdApp(tk.Tk):
             self.log(f"❌ Erro ao configurar inicialização com Windows: {e}", "error")
 
     def add_to_startup(self):
-        """Adiciona o programa à inicialização do Windows"""
         try:
             # Usando winshell
             startup_folder = winshell.startup()
@@ -1065,11 +1339,6 @@ class GerenciadorFirebirdApp(tk.Tk):
             shortcut.Targetpath = script_path
             shortcut.WorkingDirectory = os.path.dirname(script_path)
             shortcut.Description = "Gerenciador Firebird"
-            
-            # Adiciona argumento para iniciar minimizado se configurado
-            if self.conf.get("start_minimized", False):
-                shortcut.Arguments = "--minimized"
-            
             shortcut.save()
             
             self.log("✅ Programa adicionado à inicialização do Windows", "success")
@@ -1081,15 +1350,9 @@ class GerenciadorFirebirdApp(tk.Tk):
             return self._add_to_startup_registry()
 
     def _add_to_startup_registry(self):
-        """Método alternativo usando registro do Windows"""
         try:
             script_path = sys.executable if getattr(sys, 'frozen', False) else sys.argv[0]
-            
-            # Adiciona argumento para iniciar minimizado se configurado
-            if self.conf.get("start_minimized", False):
-                script_path = f'"{script_path}" --minimized'
-            else:
-                script_path = f'"{script_path}"'
+            script_path = f'"{script_path}"'
             
             key = winreg.HKEY_CURRENT_USER
             subkey = r"Software\Microsoft\Windows\CurrentVersion\Run"
@@ -1107,7 +1370,6 @@ class GerenciadorFirebirdApp(tk.Tk):
     def remove_from_startup(self):
         """Remove o programa da inicialização do Windows"""
         try:
-            # Remove atalho da pasta Inicializar
             startup_folder = winshell.startup()
             shortcut_path = os.path.join(startup_folder, "Gerenciador Firebird.lnk")
             
@@ -1234,7 +1496,11 @@ class GerenciadorFirebirdApp(tk.Tk):
         def worker():
             self.task_running = True
             self.disable_buttons()
+            
+            # Inicia a animação da barra de progresso
+            self.progress["mode"] = "indeterminate"
             self.progress.start(10)
+            
             self.set_status("Executando operação...", "blue")
 
             try:
@@ -1284,6 +1550,9 @@ class GerenciadorFirebirdApp(tk.Tk):
                 self.set_status("❌ Falha inesperada.", "red")
             finally:
                 self.progress.stop()
+                self.progress["mode"] = "determinate"
+                self.progress["value"] = 0
+                
                 self.enable_buttons()
                 self.task_running = False
                 if on_finish:
@@ -1623,7 +1892,6 @@ class GerenciadorFirebirdApp(tk.Tk):
             self.log(f"📦 Iniciando extração do arquivo ZIP: {zip_path.name}", "info")
             self._update_progress(f"Analisando arquivo: {zip_path.name}")
             
-            # Mostra informações do arquivo ZIP
             try:
                 with zipfile.ZipFile(bkp, "r") as z:
                     file_list = z.namelist()
@@ -1636,7 +1904,7 @@ class GerenciadorFirebirdApp(tk.Tk):
             self._update_progress("Iniciando extração...")
             
             def extract_with_progress():
-                """Extrai arquivo ZIP com feedback de progresso"""
+                """Extrai arquivo ZIP"""
                 try:
                     with zipfile.ZipFile(bkp, "r") as z:
                         total_files = len(z.filelist)
@@ -1721,7 +1989,7 @@ class GerenciadorFirebirdApp(tk.Tk):
         cancel_btn.pack(pady=5)
 
     def _update_progress(self, message):
-        """Atualiza mensagem de progresso"""
+        """Atualiza mensagem"""
         if hasattr(self, 'progress_label') and hasattr(self, 'progress_win'):
             self.progress_label.config(text=message)
             self.progress_win.update_idletasks()
@@ -1856,7 +2124,6 @@ class GerenciadorFirebirdApp(tk.Tk):
         self.set_status("Executando verificação completa...", "blue")
         
         def after_verify():
-            """Callback após verificação"""
             self._run_verify_with_output(cmd, db)
         
         self.run_command(cmd, on_finish=after_verify)
@@ -1908,7 +2175,6 @@ class GerenciadorFirebirdApp(tk.Tk):
 
     def _analyze_verify_output(self, output_text):
         """Analisa erros"""
-        # Erros que podem ser corrigidos com gfix
         correctable_patterns = [
             "corrupt",
             "damage",
@@ -2157,7 +2423,6 @@ class GerenciadorFirebirdApp(tk.Tk):
             # Cria backup de segurança antes da correção
             self._create_safety_backup(db, lambda: self._execute_advanced_repair(db, do_sweep))
         else:
-            # Confirmação para prosseguir sem backup
             if messagebox.askyesno(
                 "Confirmação de Risco",
                 "⚠️ ALTO RISCO ⚠️\n\n"
@@ -2177,17 +2442,14 @@ class GerenciadorFirebirdApp(tk.Tk):
         self.log("🛠️ Iniciando correção avançada do banco...", "warning")
         self.set_status("Executando correção avançada...", "orange")
         
-        # Sequência de comandos de correção
         repair_commands = []
-        
-        # Adiciona sweep apenas se solicitado
+
         if do_sweep:
             repair_commands.append({
                 "name": "Limpeza de registros antigos",
                 "cmd": [gfix, "-sweep", db_path, "-user", self.conf["firebird_user"], "-pass", self.conf["firebird_password"]]
             })
         
-        # Comandos principais de correção
         repair_commands.extend([
             {
                 "name": "Validação completa",
@@ -2212,8 +2474,7 @@ class GerenciadorFirebirdApp(tk.Tk):
             else:
                 self.log("✅ Correção avançada concluída!", "success")
                 self.set_status("Correção avançada concluída", "green")
-                
-                # Executa verificação final
+
                 verify_cmd = [
                     gfix, "-v", "-full", 
                     db_path, 
@@ -2235,7 +2496,7 @@ class GerenciadorFirebirdApp(tk.Tk):
         run_next_command()
 
     def sweep_database(self):
-        """Executa apenas a limpeza (sweep) do banco de dados"""
+        """Executa a limpeza (sweep) do banco de dados"""
         gfix = self.conf.get("gfix_path") or find_executable("gfix.exe")
         if not gfix:
             messagebox.showerror("Erro", "gfix.exe não encontrado. Configure o caminho nas configurações.")
@@ -2251,7 +2512,6 @@ class GerenciadorFirebirdApp(tk.Tk):
         if not db:
             return
 
-        # Pergunta confirmação
         if not messagebox.askyesno(
             "Limpeza do Banco",
             "🧹 LIMPEZA DO BANCO DE DADOS (SWEEP)\n\n"
@@ -2264,7 +2524,6 @@ class GerenciadorFirebirdApp(tk.Tk):
         ):
             return
 
-        # Comando de sweep
         cmd = [
             gfix, "-sweep",
             db,
@@ -2352,7 +2611,6 @@ class GerenciadorFirebirdApp(tk.Tk):
             messagebox.showwarning("Aviso", "Selecione pelo menos um processo para finalizar.")
             return
         
-        # Confirmação
         selected_count = len(selection)
         if not messagebox.askyesno(
             "Confirmação",
@@ -2409,7 +2667,6 @@ class GerenciadorFirebirdApp(tk.Tk):
         
         self.after(1000, self._refresh_all_processes)
         
-        # Log
         self.log(f"🔚 Finalização concluída: {killed_count} sucesso(s), {failed_count} falha(s)", 
                 "success" if failed_count == 0 else "warning")
 
@@ -2457,73 +2714,105 @@ class GerenciadorFirebirdApp(tk.Tk):
             messagebox.showerror("Erro", f"Erro ao acessar processo {pid}:\n{e}")
 
     def auto_refresh_monitor(self):
-        """Atualização automática do monitor"""
+        """Atualização automática"""
         if self.conf.get("auto_monitor", True):
             self.refresh_monitor()
             interval = int(self.conf.get("monitor_interval", 30)) * 1000
             self.after(interval, self.auto_refresh_monitor)
 
     # ---------- AGENDAMENTO ----------
-    def pick_sched_db(self):
-        """Seleciona banco para agendamento"""
-        db = filedialog.askopenfilename(
-            title="Selecione o banco para agendamento",
-            filetypes=[("Firebird Database", "*.fdb")]
-        )
-        if db:
-            self.sched_db_var.set(db)
-
-    def schedule_backup(self):
-        """Cria novo agendamento de backup"""
-        if not all([self.sched_db_var.get(), self.sched_name_var.get(), self.sched_time_var.get()]):
-            messagebox.showerror("Erro", "Preencha todos os campos obrigatórios.")
-            return
-        
+    def load_schedules(self):
+        """Carrega agendamentos salvos"""
         try:
-            # Valida horário
-            time_str = self.sched_time_var.get()
-            hours, minutes = map(int, time_str.split(':'))
-            if not (0 <= hours <= 23 and 0 <= minutes <= 59):
-                raise ValueError("Horário inválido")
-        except:
-            messagebox.showerror("Erro", "Horário inválido. Use o formato HH:MM (ex: 14:30)")
-            return
+            for item in self.schedules_tree.get_children():
+                self.schedules_tree.delete(item)
+            
+            schedule.clear()
+            
+            scheduled_backups = self.conf.get("scheduled_backups", [])
+            
+            for schedule_data in scheduled_backups:
+                # Formata horário
+                time_str = f"{schedule_data['hour']:02d}:{schedule_data['minute']:02d}"
+                
+                next_run = self._calculate_next_run(schedule_data)
+                
+                self.schedules_tree.insert("", "end", values=(
+                    schedule_data["name"],
+                    Path(schedule_data["database"]).name,
+                    schedule_data["frequency"],
+                    time_str,
+                    "Sim" if schedule_data.get("compress", True) else "Não",
+                    next_run
+                ))
+                
+                self._setup_schedule(schedule_data)
+            
+            status_text = f"✅ {len(scheduled_backups)} agendamento(s) carregado(s)"
+            if scheduled_backups:
+                status_text += " | Selecione um agendamento para editar ou excluir"
+            self.schedule_status.config(text=status_text)
+            
+            self.log(f"📅 {len(scheduled_backups)} agendamentos carregados", "info")
+            
+        except Exception as e:
+            error_msg = f"❌ Erro ao carregar agendamentos: {e}"
+            self.schedule_status.config(text=error_msg)
+            self.log(error_msg, "error")
 
-        schedule_data = {
-            "name": self.sched_name_var.get(),
-            "database": self.sched_db_var.get(),
-            "frequency": self.sched_freq_var.get(),
-            "time": self.sched_time_var.get(),
-            "compress": self.sched_compress_var.get()
-        }
-
-        # Adiciona à configuração
-        if "scheduled_backups" not in self.conf:
-            self.conf["scheduled_backups"] = []
-        
-        self.conf["scheduled_backups"].append(schedule_data)
-        save_config(self.conf)
-
-        # Adiciona à lista visual
-        self.schedules_tree.insert("", "end", values=(
-            schedule_data["name"],
-            Path(schedule_data["database"]).name,
-            schedule_data["frequency"],
-            schedule_data["time"],
-            "Sim" if schedule_data["compress"] else "Não"
-        ))
-
-        # Configura o agendamento
-        self._setup_schedule(schedule_data)
-        
-        # Limpa campos
-        self.sched_name_var.set("")
-        self.sched_db_var.set("")
-        self.sched_time_var.set("02:00")
-        self.sched_compress_var.set(True)
-        
-        self.log(f"📅 Agendamento criado: {schedule_data['name']}", "success")
-        messagebox.showinfo("Sucesso", f"Agendamento '{schedule_data['name']}' criado com sucesso!")
+    def _calculate_next_run(self, schedule_data):
+        """Calcula a próxima execução do agendamento"""
+        try:
+            now = datetime.now()
+            frequency = schedule_data["frequency"]
+            hour = schedule_data["hour"]
+            minute = schedule_data["minute"]
+            
+            if frequency == "Diário":
+                next_run = datetime(now.year, now.month, now.day, hour, minute)
+                if next_run <= now:
+                    next_run += timedelta(days=1)
+                    
+            elif frequency == "Semanal":
+                # Mapeia dias da semana
+                weekday_map = {
+                    "Segunda": 0, "Terça": 1, "Quarta": 2, "Quinta": 3,
+                    "Sexta": 4, "Sábado": 5, "Domingo": 6
+                }
+                target_weekday = weekday_map.get(schedule_data.get("weekday", "Segunda"), 0)
+                current_weekday = now.weekday()
+                
+                days_ahead = target_weekday - current_weekday
+                if days_ahead <= 0:
+                    days_ahead += 7
+                    
+                next_run = datetime(now.year, now.month, now.day, hour, minute) + timedelta(days=days_ahead)
+                
+            elif frequency == "Mensal":
+                target_day = int(schedule_data.get("monthday", 1))
+                try:
+                    next_run = datetime(now.year, now.month, target_day, hour, minute)
+                    if next_run <= now:
+                        if now.month == 12:
+                            next_run = datetime(now.year + 1, 1, target_day, hour, minute)
+                        else:
+                            next_run = datetime(now.year, now.month + 1, target_day, hour, minute)
+                except ValueError:
+                    # Dia inválido para o mês, usa último dia do mês
+                    if now.month == 12:
+                        next_month = datetime(now.year + 1, 1, 1)
+                    else:
+                        next_month = datetime(now.year, now.month + 1, 1)
+                    last_day = (next_month - timedelta(days=1)).day
+                    target_day = min(target_day, last_day)
+                    next_run = datetime(now.year, now.month, target_day, hour, minute)
+                    if next_run <= now:
+                        next_run = datetime(next_month.year, next_month.month, target_day, hour, minute)
+            
+            return next_run.strftime("%d/%m/%Y %H:%M")
+            
+        except Exception:
+            return "Calculando..."
 
     def _setup_schedule(self, schedule_data):
         """Configura o agendamento"""
@@ -2531,10 +2820,11 @@ class GerenciadorFirebirdApp(tk.Tk):
             # Remove agendamentos existentes com o mesmo nome
             schedule.clear(schedule_data["name"])
             
-            # Configura o agendamento baseado na frequência
             job = None
+            time_str = f"{schedule_data['hour']:02d}:{schedule_data['minute']:02d}"
+            
             if schedule_data["frequency"] == "Diário":
-                job = schedule.every().day.at(schedule_data["time"]).do(
+                job = schedule.every().day.at(time_str).do(
                     self.execute_scheduled_backup,
                     schedule_data["database"],
                     schedule_data["name"],
@@ -2542,16 +2832,29 @@ class GerenciadorFirebirdApp(tk.Tk):
                 ).tag(schedule_data["name"])
             
             elif schedule_data["frequency"] == "Semanal":
-                job = schedule.every().monday.at(schedule_data["time"]).do(
-                    self.execute_scheduled_backup,
-                    schedule_data["database"],
-                    schedule_data["name"],
-                    schedule_data["compress"]
-                ).tag(schedule_data["name"])
+                # Mapeia dias da semana
+                weekday_map = {
+                    "Segunda": schedule.every().monday,
+                    "Terça": schedule.every().tuesday,
+                    "Quarta": schedule.every().wednesday,
+                    "Quinta": schedule.every().thursday,
+                    "Sexta": schedule.every().friday,
+                    "Sábado": schedule.every().saturday,
+                    "Domingo": schedule.every().sunday
+                }
+                
+                weekday = schedule_data.get("weekday", "Segunda")
+                if weekday in weekday_map:
+                    job = weekday_map[weekday].at(time_str).do(
+                        self.execute_scheduled_backup,
+                        schedule_data["database"],
+                        schedule_data["name"],
+                        schedule_data["compress"]
+                    ).tag(schedule_data["name"])
             
             elif schedule_data["frequency"] == "Mensal":
-                # Agenda para o primeiro dia de cada mês
-                job = schedule.every(30).days.at(schedule_data["time"]).do(
+                day = int(schedule_data.get("monthday", 1))
+                job = schedule.every(30).days.at(time_str).do(
                     self.execute_scheduled_backup,
                     schedule_data["database"],
                     schedule_data["name"],
@@ -2559,46 +2862,285 @@ class GerenciadorFirebirdApp(tk.Tk):
                 ).tag(schedule_data["name"])
             
             if job:
-                self.log(f"🕒 Agendamento configurado: {schedule_data['name']} - {schedule_data['frequency']} às {schedule_data['time']}", "info")
+                self.log(f"🕒 Agendamento configurado: {schedule_data['name']} - {schedule_data['frequency']} às {time_str}", "info")
                 
         except Exception as e:
             self.log(f"❌ Erro ao configurar agendamento '{schedule_data['name']}': {e}", "error")
 
-    def load_schedules(self):
-        """Carrega agendamentos salvos"""
-        try:
-            # Limpa a lista visual
-            for item in self.schedules_tree.get_children():
-                self.schedules_tree.delete(item)
+    def edit_schedule(self):
+        """Edita agendamento selecionado"""
+        selection = self.schedules_tree.selection()
+        if not selection:
+            messagebox.showwarning("Aviso", "Selecione um agendamento para editar.")
+            return
+        
+        if len(selection) > 1:
+            messagebox.showwarning("Aviso", "Selecione apenas um agendamento para editar.")
+            return
+        
+        item = selection[0]
+        values = self.schedules_tree.item(item, "values")
+        schedule_name = values[0]
+        
+        schedule_data = None
+        for sched in self.conf.get("scheduled_backups", []):
+            if sched["name"] == schedule_name:
+                schedule_data = sched
+                break
+        
+        if not schedule_data:
+            messagebox.showerror("Erro", "Agendamento não encontrado na configuração.")
+            return
+        
+        # Cria janela de edição
+        edit_win = tk.Toplevel(self)
+        edit_win.title("Editar Agendamento")
+        edit_win.geometry("500x550")
+        edit_win.resizable(False, False)
+        edit_win.transient(self)
+        edit_win.grab_set()
+        
+        # Centraliza
+        self.update_idletasks()
+        x = self.winfo_x() + (self.winfo_width() // 2) - 250
+        y = self.winfo_y() + (self.winfo_height() // 2) - 225
+        edit_win.geometry(f"+{x}+{y}")
+        
+        # Ícone
+        icon_path = BASE_DIR / "images" / "icon.ico"
+        if icon_path.exists():
+            edit_win.iconbitmap(str(icon_path))
+        
+        # Frame principal
+        main_frame = ttk.Frame(edit_win, padding=20)
+        main_frame.pack(fill="both", expand=True)
+        
+        ttk.Label(main_frame, text="Editar Agendamento", font=("Arial", 14, "bold")).pack(pady=(0, 20))
+        
+        # Campos de edição
+        ttk.Label(main_frame, text="Nome do agendamento:*", font=("Arial", 9, "bold")).pack(anchor="w", pady=(5, 2))
+        edit_name_var = tk.StringVar(value=schedule_data["name"])
+        edit_name_entry = ttk.Entry(main_frame, textvariable=edit_name_var, width=40, font=("Arial", 10))
+        edit_name_entry.pack(fill="x", pady=(0, 10))
+        edit_name_entry.focus()
+        
+        ttk.Label(main_frame, text="Banco de dados:*", font=("Arial", 9, "bold")).pack(anchor="w", pady=(5, 2))
+        edit_db_var = tk.StringVar(value=schedule_data["database"])
+        db_frame = ttk.Frame(main_frame)
+        db_frame.pack(fill="x", pady=(0, 10))
+        edit_db_entry = ttk.Entry(db_frame, textvariable=edit_db_var, width=35, font=("Arial", 10))
+        edit_db_entry.pack(side="left", fill="x", expand=True)
+        ttk.Button(db_frame, text="📁", width=3, 
+                command=lambda: self._pick_schedule_db(edit_db_var)).pack(side="left", padx=5)
+        
+        ttk.Label(main_frame, text="Frequência:*", font=("Arial", 9, "bold")).pack(anchor="w", pady=(5, 2))
+        edit_freq_var = tk.StringVar(value=schedule_data["frequency"])
+        freq_combo = ttk.Combobox(main_frame, textvariable=edit_freq_var, 
+                                values=["Diário", "Semanal", "Mensal"], 
+                                state="readonly", width=20, font=("Arial", 10))
+        freq_combo.pack(fill="x", pady=(0, 10))
+        
+        # Frame para opções específicas da frequência
+        edit_freq_options_frame = ttk.Frame(main_frame)
+        edit_freq_options_frame.pack(fill="x", pady=(0, 10))
+        
+        # Horário
+        ttk.Label(main_frame, text="Horário (HH:MM):*", font=("Arial", 9, "bold")).pack(anchor="w", pady=(5, 2))
+        
+        # Frame para o campo de horário
+        time_frame = ttk.Frame(main_frame)
+        time_frame.pack(anchor="w", pady=(0, 10))
+        
+        # Função de validação
+        def validate_time_input(new_value):
+            if new_value == "":
+                return True
+            if len(new_value) > 2:
+                return False
+            return new_value.isdigit()
+        
+        vcmd = (self.register(validate_time_input), "%P")
+        
+        # Campo de horas
+        hour_var = tk.StringVar(value=f"{schedule_data['hour']:02d}")
+        hour_entry = ttk.Entry(
+            time_frame,
+            textvariable=hour_var,
+            width=3,
+            font=("Arial", 10),
+            justify="center",
+            validate="key",
+            validatecommand=vcmd
+        )
+        hour_entry.pack(side="left")
+        
+        # Separador
+        ttk.Label(time_frame, text=":", font=("Arial", 10, "bold")).pack(side="left", padx=2)
+        
+        # Campo de minutos
+        minute_var = tk.StringVar(value=f"{schedule_data['minute']:02d}")
+        minute_entry = ttk.Entry(
+            time_frame,
+            textvariable=minute_var,
+            width=3,
+            font=("Arial", 10),
+            justify="center",
+            validate="key",
+            validatecommand=vcmd
+        )
+        minute_entry.pack(side="left")
+        
+        # Tooltip
+        ttk.Label(
+            main_frame,
+            text="Formato: HH:MM (24 horas). Ex: 14:30, 02:00, 23:45",
+            foreground="gray",
+            font=("Arial", 8)
+        ).pack(anchor="w", pady=(0, 10))
+        
+        # Compactar backup
+        compress_frame = ttk.Frame(main_frame)
+        compress_frame.pack(fill="x", pady=10)
+        edit_compress_var = tk.BooleanVar(value=schedule_data.get("compress", True))
+        ttk.Checkbutton(
+            compress_frame,
+            variable=edit_compress_var,
+            text="Compactar backup após gerar (recomendado)"
+        ).pack(anchor="w")
+        
+        # Botões
+        btn_frame = ttk.Frame(main_frame)
+        btn_frame.pack(fill="x", pady=20)
+        
+        def save_edit():
+            """Salva as alterações do agendamento"""
+            if not all([edit_name_var.get(), edit_db_var.get()]):
+                messagebox.showerror("Erro", "Preencha todos os campos obrigatórios.")
+                return
             
-            # Limpa agendamentos existentes
-            schedule.clear()
+            hour_str = hour_var.get().strip()
+            minute_str = minute_var.get().strip()
             
-            # Carrega da configuração
-            scheduled_backups = self.conf.get("scheduled_backups", [])
-            for schedule_data in scheduled_backups:
-                # Adiciona à lista visual
-                self.schedules_tree.insert("", "end", values=(
-                    schedule_data["name"],
-                    Path(schedule_data["database"]).name,
-                    schedule_data["frequency"],
-                    schedule_data["time"],
-                    "Sim" if schedule_data.get("compress", True) else "Não"
-                ))
+            if not hour_str or not minute_str:
+                messagebox.showerror("Erro", "Preencha horas e minutos.")
+                hour_entry.focus()
+                return
                 
-                # Configura o agendamento
-                self._setup_schedule(schedule_data)
+            if not hour_str.isdigit() or not minute_str.isdigit():
+                messagebox.showerror("Erro", "Horas e minutos devem conter apenas números.")
+                hour_entry.focus()
+                return
+                
+            if len(hour_str) > 2 or len(minute_str) > 2:
+                messagebox.showerror("Erro", "Horas e minutos devem ter no máximo 2 dígitos.")
+                hour_entry.focus()
+                return
+                
+            try:
+                hours_int = int(hour_str)
+                minutes_int = int(minute_str)
+                
+                if not (0 <= hours_int <= 23):
+                    raise ValueError("Hora deve estar entre 00 e 23")
+                if not (0 <= minutes_int <= 59):
+                    raise ValueError("Minutos devem estar entre 00 e 59")
+                    
+            except ValueError as e:
+                messagebox.showerror("Erro", f"Horário inválido: {e}")
+                hour_entry.focus()
+                return
             
-            self.log(f"📅 {len(scheduled_backups)} agendamentos carregados", "info")
+            hour_final = f"{hours_int:02d}"
+            minute_final = f"{minutes_int:02d}"
             
-        except Exception as e:
-            self.log(f"❌ Erro ao carregar agendamentos: {e}", "error")
+            frequency = edit_freq_var.get()
+            
+            schedule_data.update({
+                "name": edit_name_var.get().strip(),
+                "database": edit_db_var.get().strip(),
+                "frequency": frequency,
+                "hour": int(hour_final),
+                "minute": int(minute_final),
+                "compress": edit_compress_var.get()
+            })
+            
+            if frequency == "Semanal":
+                if hasattr(self, 'sched_weekday_var'):
+                    schedule_data["weekday"] = self.sched_weekday_var.get()
+                else:
+                    messagebox.showerror("Erro", "Selecione um dia da semana para o agendamento semanal.")
+                    return
+            elif frequency == "Mensal":
+                if hasattr(self, 'sched_monthday_var'):
+                    schedule_data["monthday"] = self.sched_monthday_var.get()
+                else:
+                    messagebox.showerror("Erro", "Selecione um dia do mês para o agendamento mensal.")
+                    return
+            
+            save_config(self.conf)
+            self.load_schedules()
+            
+            self.log(f"✏️ Agendamento editado: {schedule_data['name']}", "success")
+            messagebox.showinfo("Sucesso", f"Agendamento '{schedule_data['name']}' editado com sucesso!")
+            edit_win.destroy()
+        
+        def cancel_edit():
+            edit_win.destroy()
+        
+        ttk.Button(btn_frame, text="💾 Salvar Alterações", 
+                command=save_edit, cursor="hand2").pack(side="left", padx=5)
+        ttk.Button(btn_frame, text="❌ Cancelar", 
+                command=cancel_edit, cursor="hand2").pack(side="right", padx=5)
+        
+        self._update_edit_schedule_freq_options(edit_freq_options_frame, edit_freq_var.get(), schedule_data)
+        
+        freq_combo.bind(
+            '<<ComboboxSelected>>',
+            lambda e: self._update_edit_schedule_freq_options(edit_freq_options_frame, edit_freq_var.get(), schedule_data)
+        )
+
+    def _update_edit_schedule_freq_options(self, options_frame, frequency, schedule_data):
+        """Atualiza opções de frequência na janela de edição"""
+        for widget in options_frame.winfo_children():
+            widget.destroy()
+        
+        if frequency == "Diário":
+            ttk.Label(options_frame, text="O backup será executado diariamente no horário selecionado.",
+                     foreground="gray", font=("Arial", 9)).pack(anchor="w")
+            
+        elif frequency == "Semanal":
+            ttk.Label(options_frame, text="Dia da semana:*", font=("Arial", 9, "bold")).pack(anchor="w", pady=(5, 2))
+            self.sched_weekday_var = tk.StringVar(value=schedule_data.get("weekday", "Segunda"))
+            weekday_combo = ttk.Combobox(options_frame, textvariable=self.sched_weekday_var,
+                                       values=["Segunda", "Terça", "Quarta", "Quinta", "Sexta", "Sábado", "Domingo"],
+                                       state="readonly", width=15, font=("Arial", 10))
+            weekday_combo.pack(anchor="w", pady=(0, 5))
+            
+        elif frequency == "Mensal":
+            ttk.Label(options_frame, text="Dia do mês:*", font=("Arial", 9, "bold")).pack(anchor="w", pady=(5, 2))
+            self.sched_monthday_var = tk.StringVar(value=schedule_data.get("monthday", "1"))
+            monthday_combo = ttk.Combobox(options_frame, textvariable=self.sched_monthday_var,
+                                        values=[str(i) for i in range(1, 32)], state="readonly", width=5, font=("Arial", 10))
+            monthday_combo.pack(anchor="w", pady=(0, 5))
+            ttk.Label(options_frame, text="(1-31)", foreground="gray", font=("Arial", 9)).pack(anchor="w")
 
     def remove_schedule(self):
         """Remove agendamento selecionado"""
         selection = self.schedules_tree.selection()
         if not selection:
             messagebox.showwarning("Aviso", "Selecione um agendamento para remover.")
+            return
+        
+        selected_names = [self.schedules_tree.item(item, "values")[0] for item in selection]
+        names_text = "\n".join([f"• {name}" for name in selected_names])
+        
+        if not messagebox.askyesno(
+            "Confirmar Exclusão",
+            f"🚨 TEM CERTEZA QUE DESEJA EXCLUIR O(S) AGENDAMENTO(S)?\n\n"
+            f"Agendamentos selecionados:\n{names_text}\n\n"
+            f"Esta ação não pode ser desfeita!",
+            icon=messagebox.WARNING
+        ):
             return
         
         for item in selection:
@@ -2621,7 +3163,7 @@ class GerenciadorFirebirdApp(tk.Tk):
             
             self.log(f"🗑️ Agendamento removido: {schedule_name}", "info")
         
-        messagebox.showinfo("Sucesso", "Agendamento removido com sucesso!")
+        messagebox.showinfo("Sucesso", f"{len(selection)} agendamento(s) removido(s) com sucesso!")
 
     # ---------- FERRAMENTAS AVANÇADAS ----------
     def optimize_database(self):
@@ -2637,7 +3179,7 @@ class GerenciadorFirebirdApp(tk.Tk):
         
         self.log("🔧 Iniciando otimização do banco...", "info")
         
-        # Comandos de otimização - APENAS OS ESSENCIAIS
+        # Comandos de otimização
         commands = [
             [gfix, "-sweep", db, "-user", self.conf["firebird_user"], "-pass", self.conf["firebird_password"]],
             [gfix, "-validate", "-full", db, "-user", self.conf["firebird_user"], "-pass", self.conf["firebird_password"]],
@@ -2704,7 +3246,6 @@ class GerenciadorFirebirdApp(tk.Tk):
         
         def after_restore():
             self.log(f"✅ Migração concluída: {migrated_file}", "success")
-            # Limpa backup temporário
             try:
                 backup_file.unlink()
             except:
@@ -2714,7 +3255,7 @@ class GerenciadorFirebirdApp(tk.Tk):
 
     # ---------- RELATÓRIOS ----------
     def generate_gstat_report(self):
-        """Gera relatório detalhado do banco usando gstat.exe"""
+        """Gera relatório detalhado do banco"""
         gstat = self.conf.get("gstat_path") or find_executable("gstat.exe")
         if not gstat:
             messagebox.showerror("Erro", "gstat.exe não encontrado. Configure o caminho nas configurações.")
@@ -2872,7 +3413,13 @@ class GerenciadorFirebirdApp(tk.Tk):
             scheduled_backups = self.conf.get("scheduled_backups", [])
             report_lines.append(f"\n🕒 AGENDAMENTOS: {len(scheduled_backups)} configurados")
             for sched in scheduled_backups:
-                report_lines.append(f"- {sched['name']}: {sched['frequency']} às {sched['time']}")
+                time_str = f"{sched['hour']:02d}:{sched['minute']:02d}"
+                if sched["frequency"] == "Semanal":
+                    report_lines.append(f"- {sched['name']}: {sched['frequency']} ({sched.get('weekday', 'Segunda')}) às {time_str}")
+                elif sched["frequency"] == "Mensal":
+                    report_lines.append(f"- {sched['name']}: {sched['frequency']} (dia {sched.get('monthday', '1')}) às {time_str}")
+                else:
+                    report_lines.append(f"- {sched['name']}: {sched['frequency']} às {time_str}")
             
             # Inicialização com Windows
             startup_status = "Sim" if self.conf.get("start_with_windows", False) else "Não"
@@ -2922,7 +3469,6 @@ class GerenciadorFirebirdApp(tk.Tk):
             
             for partition in partitions:
                 try:
-                    # Ignora partições de CD/DVD e outras mídias removíveis sem disco
                     if partition.fstype and partition.device:
                         usage = psutil.disk_usage(partition.mountpoint)
                         
@@ -2963,7 +3509,6 @@ class GerenciadorFirebirdApp(tk.Tk):
                     report_lines.append(f"   Erro: {str(e)}")
                     report_lines.append("")
             
-            # Adiciona resumo
             accessible_partitions = [p for p in partitions if not p.fstype in ['cdrom', ''] and not p.device.startswith('\\\\')]
             total_disks = len(accessible_partitions)
             
@@ -2978,7 +3523,6 @@ class GerenciadorFirebirdApp(tk.Tk):
             with open(report_path, 'w', encoding='utf-8') as f:
                 f.write('\n'.join(report_lines))
             
-            # Mostra relatório em janela personalizada
             self._show_report_window("Relatório de Espaço em Disco", report_lines, report_path)
             
             self.log("💾 Relatório de espaço em disco gerado com sucesso", "success")
@@ -3124,7 +3668,7 @@ class GerenciadorFirebirdApp(tk.Tk):
         """Janela de configurações"""
         win = tk.Toplevel(self)
         win.title("Configurações do Sistema")
-        win.geometry("500x750")
+        win.geometry("500x650")
         win.resizable(False, False)
         win.transient(self)
         win.grab_set()
@@ -3132,7 +3676,7 @@ class GerenciadorFirebirdApp(tk.Tk):
         # Centraliza
         self.update_idletasks()
         x = self.winfo_x() + (self.winfo_width() // 2) - 250
-        y = self.winfo_y() + (self.winfo_height() // 2) - 350
+        y = self.winfo_y() + (self.winfo_height() // 2) - 325
         win.geometry(f"+{x}+{y}")
 
         # Ícone
@@ -3227,16 +3771,12 @@ class GerenciadorFirebirdApp(tk.Tk):
         tray_var = tk.BooleanVar(value=self.conf.get("minimize_to_tray", True))
         ttk.Checkbutton(system_frame, variable=tray_var).grid(row=3, column=1, sticky="w", padx=5)
 
-        ttk.Label(system_frame, text="Iniciar minimizado:").grid(row=4, column=0, sticky="w", pady=8)
-        start_min_var = tk.BooleanVar(value=self.conf.get("start_minimized", False))
-        ttk.Checkbutton(system_frame, variable=start_min_var).grid(row=4, column=1, sticky="w", padx=5)
-
         # Iniciar com Windows
-        ttk.Label(system_frame, text="Iniciar com Windows:").grid(row=5, column=0, sticky="w", pady=8)
+        ttk.Label(system_frame, text="Iniciar com Windows:").grid(row=4, column=0, sticky="w", pady=8)
         startup_var = tk.BooleanVar(value=self.conf.get("start_with_windows", False))
         startup_cb = ttk.Checkbutton(system_frame, variable=startup_var, 
                                     command=lambda: self.toggle_startup(startup_var.get()))
-        startup_cb.grid(row=5, column=1, sticky="w", padx=5)
+        startup_cb.grid(row=4, column=1, sticky="w", padx=5)
 
         # Botões
         btn_frame = ttk.Frame(win)
@@ -3257,7 +3797,6 @@ class GerenciadorFirebirdApp(tk.Tk):
                 "auto_monitor": monitor_var.get(),
                 "monitor_interval": interval_var.get(),
                 "minimize_to_tray": tray_var.get(),
-                "start_minimized": start_min_var.get(),
                 "start_with_windows": startup_var.get(),
                 "log_retention_days": log_retention_var.get()
             })
