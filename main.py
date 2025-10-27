@@ -1168,7 +1168,7 @@ class GerenciadorFirebirdApp(tk.Tk):
         footer_frame = tk.Frame(self, bg="#f5f5f5", relief="ridge", borderwidth=1)
         footer_frame.pack(side="bottom", fill="x")
         
-        APP_VERSION = "2025.10.23.0830"
+        APP_VERSION = "2025.10.27.0916"
 
         footer_left = tk.Label(
             footer_frame,
