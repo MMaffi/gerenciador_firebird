@@ -398,6 +398,15 @@ class GerenciadorFirebirdApp(tk.Tk):
         )
         tray_btn.pack(side="left", padx=2)
 
+        # Botão abrir pasta de backups
+        backup_folder_btn = ttk.Button(
+            controls_frame,
+            text="📁 Backups",
+            command=self.open_backup_folder,
+            cursor="hand2"
+        )
+        backup_folder_btn.pack(side="left", padx=2)
+
         # Botão configurações
         config_btn = ttk.Button(
             controls_frame,
@@ -1483,6 +1492,31 @@ class GerenciadorFirebirdApp(tk.Tk):
         """Atualiza status da aplicação"""
         self.status_label.config(text=text, foreground=color)
         self.update_idletasks()
+
+    def open_backup_folder(self):
+        """Abre a pasta de backups padrão"""
+        try:
+            backup_dir = Path(self.conf.get("backup_dir", DEFAULT_BACKUP_DIR))
+            
+            # Verifica se o diretório existe, se não cria
+            if not backup_dir.exists():
+                backup_dir.mkdir(parents=True, exist_ok=True)
+                self.log(f"📁 Pasta de backups criada: {backup_dir}", "info")
+            
+            # Abre no explorador de arquivos
+            if open_file_with_default_app(backup_dir):
+                self.log(f"📁 Pasta de backups aberta: {backup_dir}", "success")
+            else:
+                self.log(f"❌ Não foi possível abrir a pasta: {backup_dir}", "error")
+                messagebox.showerror(
+                    "Erro", 
+                    f"Não foi possível abrir a pasta de backups:\n{backup_dir}"
+                )
+                
+        except Exception as e:
+            error_msg = f"❌ Erro ao abrir pasta de backups: {e}"
+            self.log(error_msg, "error")
+            messagebox.showerror("Erro", error_msg)
 
     def disable_buttons(self):
         """Desabilita todos os botões durante operações"""
