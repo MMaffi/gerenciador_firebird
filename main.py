@@ -128,9 +128,38 @@ def setup_logging():
     return logger
 
 # ---------- GERENCIADOR DE CONFIG ----------
+def find_firebird_executables(firebird_path):
+    """Encontra automaticamente os executáveis do Firebird na pasta especificada"""
+    executables = {
+        'gbak_path': '',
+        'gfix_path': '',
+        'gstat_path': ''
+    }
+    
+    if not firebird_path or not os.path.exists(firebird_path):
+        return executables
+    
+    # Lista de executáveis para procurar
+    exe_files = ['gbak.exe', 'gfix.exe', 'gstat.exe']
+    
+    # Procura recursivamente na pasta do Firebird
+    for root, dirs, files in os.walk(firebird_path):
+        for file in files:
+            if file.lower() in exe_files:
+                full_path = os.path.join(root, file)
+                if file.lower() == 'gbak.exe':
+                    executables['gbak_path'] = full_path
+                elif file.lower() == 'gfix.exe':
+                    executables['gfix_path'] = full_path
+                elif file.lower() == 'gstat.exe':
+                    executables['gstat_path'] = full_path
+    
+    return executables
+
 def load_config():
     """Carrega configurações do JSON"""
     default = {
+        "firebird_path": "",
         "gbak_path": "",
         "gfix_path": "",
         "gstat_path": "",
@@ -165,6 +194,16 @@ def load_config():
             logging.info("Arquivo de configuração criado com sucesso")
         except Exception as e:
             logging.error(f"Falha ao criar config.json: {e}")
+    
+    # Se o caminho do Firebird estiver configurado, busca os executáveis automaticamente
+    if default.get("firebird_path") and os.path.exists(default["firebird_path"]):
+        executables = find_firebird_executables(default["firebird_path"])
+        
+        # Atualiza apenas se os executáveis não estiverem configurados manualmente
+        for exe_name, exe_path in executables.items():
+            if exe_path and (not default.get(exe_name) or not os.path.exists(default[exe_name])):
+                default[exe_name] = exe_path
+                logging.info(f"Executável {exe_name} encontrado automaticamente: {exe_path}")
     
     # Executa limpeza de logs ao carregar configurações
     try:
@@ -1577,7 +1616,7 @@ class GerenciadorFirebirdApp(tk.Tk):
         """Gera backup do banco de dados"""
         gbak = self.conf.get("gbak_path") or find_executable("gbak.exe")
         if not gbak:
-            messagebox.showerror("Erro", "gbak.exe não encontrado. Configure o caminho nas configurações.")
+            messagebox.showerror("Erro", "gbak.exe não encontrado. Configure o caminho do Firebird nas configurações.")
             return
         
         self.conf["gbak_path"] = gbak
@@ -1855,7 +1894,7 @@ class GerenciadorFirebirdApp(tk.Tk):
         """Restaura backup para banco de dados"""
         gbak = self.conf.get("gbak_path") or find_executable("gbak.exe")
         if not gbak:
-            messagebox.showerror("Erro", "gbak.exe não encontrado. Configure o caminho nas configurações.")
+            messagebox.showerror("Erro", "gbak.exe não encontrado. Configure o caminho do Firebird nas configurações.")
             return
         
         self.conf["gbak_path"] = gbak
@@ -2100,7 +2139,7 @@ class GerenciadorFirebirdApp(tk.Tk):
         """Verifica integridade do banco"""
         gfix = self.conf.get("gfix_path") or find_executable("gfix.exe")
         if not gfix:
-            messagebox.showerror("Erro", "gfix.exe não encontrado. Configure o caminho nas configurações.")
+            messagebox.showerror("Erro", "gfix.exe não encontrado. Configure o caminho do Firebird nas configurações.")
             return
         
         self.conf["gfix_path"] = gfix
@@ -2387,7 +2426,7 @@ class GerenciadorFirebirdApp(tk.Tk):
         """Executa correção completa do banco de dados"""
         gfix = self.conf.get("gfix_path") or find_executable("gfix.exe")
         if not gfix:
-            messagebox.showerror("Erro", "gfix.exe não encontrado. Configure o caminho nas configurações.")
+            messagebox.showerror("Erro", "gfix.exe não encontrado. Configure o caminho do Firebird nas configurações.")
             return
         
         self.conf["gfix_path"] = gfix
@@ -2499,7 +2538,7 @@ class GerenciadorFirebirdApp(tk.Tk):
         """Executa a limpeza (sweep) do banco de dados"""
         gfix = self.conf.get("gfix_path") or find_executable("gfix.exe")
         if not gfix:
-            messagebox.showerror("Erro", "gfix.exe não encontrado. Configure o caminho nas configurações.")
+            messagebox.showerror("Erro", "gfix.exe não encontrado. Configure o caminho do Firebird nas configurações.")
             return
         
         self.conf["gfix_path"] = gfix
@@ -3170,7 +3209,7 @@ class GerenciadorFirebirdApp(tk.Tk):
         """Executa operações de otimização no banco"""
         gfix = self.conf.get("gfix_path") or find_executable("gfix.exe")
         if not gfix:
-            messagebox.showerror("Erro", "gfix.exe não encontrado.")
+            messagebox.showerror("Erro", "gfix.exe não encontrado. Configure o caminho do Firebird nas configurações.")
             return
         
         db = filedialog.askopenfilename(title="Selecione o banco para otimizar")
@@ -3204,7 +3243,7 @@ class GerenciadorFirebirdApp(tk.Tk):
         """Migra banco entre versões do Firebird"""
         gbak = self.conf.get("gbak_path") or find_executable("gbak.exe")
         if not gbak:
-            messagebox.showerror("Erro", "gbak.exe não encontrado.")
+            messagebox.showerror("Erro", "gbak.exe não encontrado. Configure o caminho do Firebird nas configurações.")
             return
         
         source_db = filedialog.askopenfilename(title="Selecione o banco para migrar")
@@ -3258,7 +3297,7 @@ class GerenciadorFirebirdApp(tk.Tk):
         """Gera relatório detalhado do banco"""
         gstat = self.conf.get("gstat_path") or find_executable("gstat.exe")
         if not gstat:
-            messagebox.showerror("Erro", "gstat.exe não encontrado. Configure o caminho nas configurações.")
+            messagebox.showerror("Erro", "gstat.exe não encontrado. Configure o caminho do Firebird nas configurações.")
             return
         
         self.conf["gstat_path"] = gstat
@@ -3691,33 +3730,31 @@ class GerenciadorFirebirdApp(tk.Tk):
         firebird_frame = ttk.Frame(notebook, padding=10)
         notebook.add(firebird_frame, text="Firebird")
 
-        ttk.Label(firebird_frame, text="Local do gbak.exe:").grid(row=0, column=0, sticky="w", pady=8)
-        gbak_var = tk.StringVar(value=self.conf.get("gbak_path", ""))
-        gbak_entry = ttk.Entry(firebird_frame, textvariable=gbak_var, width=40)
-        gbak_entry.grid(row=0, column=1, padx=5)
-        ttk.Button(firebird_frame, text="...", width=3, 
-                  command=lambda: self.pick_exe(gbak_var, "gbak.exe")).grid(row=0, column=2)
+        # Caminho da pasta do Firebird
+        ttk.Label(firebird_frame, text="Pasta do Firebird:*", font=("Arial", 9, "bold")).grid(row=0, column=0, sticky="w", pady=8)
+        firebird_path_var = tk.StringVar(value=self.conf.get("firebird_path", ""))
+        firebird_path_entry = ttk.Entry(firebird_frame, textvariable=firebird_path_var, width=40)
+        firebird_path_entry.grid(row=0, column=1, padx=5)
+        ttk.Button(firebird_frame, text="📁", width=3, 
+                  command=lambda: self.pick_firebird_folder(firebird_path_var)).grid(row=0, column=2)
 
-        ttk.Label(firebird_frame, text="Local do gfix.exe:").grid(row=1, column=0, sticky="w", pady=8)
-        gfix_var = tk.StringVar(value=self.conf.get("gfix_path", ""))
-        gfix_entry = ttk.Entry(firebird_frame, textvariable=gfix_var, width=40)
-        gfix_entry.grid(row=1, column=1, padx=5)
-        ttk.Button(firebird_frame, text="...", width=3,
-                  command=lambda: self.pick_exe(gfix_var, "gfix.exe")).grid(row=1, column=2)
+        # Botão para buscar automaticamente
+        ttk.Button(firebird_frame, text="🔍 Buscar Automaticamente", 
+                  command=lambda: self.auto_detect_firebird(firebird_path_var),
+                  cursor="hand2").grid(row=1, column=1, sticky="w", padx=5, pady=5)
 
-        # Caminho do gstat.exe
-        ttk.Label(firebird_frame, text="Local do gstat.exe:").grid(row=2, column=0, sticky="w", pady=8)
-        gstat_var = tk.StringVar(value=self.conf.get("gstat_path", ""))
-        gstat_entry = ttk.Entry(firebird_frame, textvariable=gstat_var, width=40)
-        gstat_entry.grid(row=2, column=1, padx=5)
-        ttk.Button(firebird_frame, text="...", width=3,
-                  command=lambda: self.pick_exe(gstat_var, "gstat.exe")).grid(row=2, column=2)
+        # Status dos executáveis encontrados
+        self.exe_status_label = ttk.Label(firebird_frame, text="", foreground="gray", font=("Arial", 8))
+        self.exe_status_label.grid(row=2, column=0, columnspan=3, sticky="w", pady=(0, 10))
+
+        # Atualiza status inicial
+        self._update_exe_status()
 
         ttk.Label(firebird_frame, text="Pasta de backups:").grid(row=3, column=0, sticky="w", pady=8)
         backup_var = tk.StringVar(value=self.conf.get("backup_dir", ""))
         backup_entry = ttk.Entry(firebird_frame, textvariable=backup_var, width=40)
         backup_entry.grid(row=3, column=1, padx=5)
-        ttk.Button(firebird_frame, text="...", width=3,
+        ttk.Button(firebird_frame, text="📁", width=3,
                   command=lambda: self.pick_dir(backup_var)).grid(row=3, column=2)
 
         ttk.Label(firebird_frame, text="Host do Firebird:").grid(row=4, column=0, sticky="w", pady=8)
@@ -3783,10 +3820,20 @@ class GerenciadorFirebirdApp(tk.Tk):
         btn_frame.pack(pady=10)
 
         def save_all_config():
+            # Atualiza o caminho do Firebird primeiro
+            new_firebird_path = firebird_path_var.get().strip()
+            
+            # Se o caminho do Firebird mudou, busca os executáveis novamente
+            if new_firebird_path != self.conf.get("firebird_path", ""):
+                self.conf["firebird_path"] = new_firebird_path
+                if new_firebird_path and os.path.exists(new_firebird_path):
+                    executables = find_firebird_executables(new_firebird_path)
+                    # Atualiza os caminhos dos executáveis
+                    for exe_name, exe_path in executables.items():
+                        if exe_path:
+                            self.conf[exe_name] = exe_path
+            
             self.conf.update({
-                "gbak_path": gbak_var.get(),
-                "gfix_path": gfix_var.get(),
-                "gstat_path": gstat_var.get(),
                 "backup_dir": backup_var.get(),
                 "firebird_host": host_var.get(),
                 "firebird_port": port_var.get(),
@@ -3804,10 +3851,8 @@ class GerenciadorFirebirdApp(tk.Tk):
             if save_config(self.conf):
                 # Aplica a configuração de inicialização com Windows
                 self.apply_startup_setting(startup_var.get())
-                # Executa limpeza de logs
                 try:
                     cleanup_old_logs(LOG_FILE, log_retention_var.get())
-                    self.log(f"🧹 Configuração de logs atualizada: {log_retention_var.get()} dias", "info")
                 except Exception as e:
                     self.log(f"⚠️ Erro na limpeza de logs: {e}", "warning")
                 
@@ -3824,14 +3869,74 @@ class GerenciadorFirebirdApp(tk.Tk):
                   command=win.destroy,
                   cursor="hand2").pack(side="left", padx=10)
 
-    def pick_exe(self, var, exe_name):
-        """Seleciona executável"""
-        path = filedialog.askopenfilename(
-            title=f"Selecione {exe_name}", 
-            filetypes=[("Executável", "*.exe"), ("Todos os arquivos", "*.*")]
-        )
+        # Atualiza status quando o caminho do Firebird muda
+        def on_firebird_path_change(*args):
+            self.after(500, self._update_exe_status)
+        
+        firebird_path_var.trace("w", on_firebird_path_change)
+
+    def pick_firebird_folder(self, var):
+        """Seleciona pasta do Firebird"""
+        path = filedialog.askdirectory(title="Selecione a pasta do Firebird")
         if path:
             var.set(path)
+
+    def auto_detect_firebird(self, var):
+        """Tenta detectar automaticamente a pasta do Firebird"""
+        common_paths = [
+            "C:\\Program Files\\Firebird",
+            "C:\\Program Files (x86)\\Firebird", 
+            "C:\\Firebird",
+            "D:\\Firebird",
+            "E:\\Firebird"
+        ]
+        
+        for path in common_paths:
+            if os.path.exists(path):
+                var.set(path)
+                self.log(f"🔍 Firebird detectado automaticamente: {path}", "info")
+                messagebox.showinfo("Detecção Automática", f"Firebird encontrado em:\n{path}")
+                return
+        
+        # Se não encontrou, tenta encontrar no PATH
+        gbak_path = find_executable("gbak.exe")
+        if gbak_path:
+            firebird_dir = os.path.dirname(os.path.dirname(gbak_path))
+            var.set(firebird_dir)
+            self.log(f"🔍 Firebird detectado via PATH: {firebird_dir}", "info")
+            messagebox.showinfo("Detecção Automática", f"Firebird encontrado via PATH:\n{firebird_dir}")
+            return
+        
+        messagebox.showinfo("Detecção Automática", "Não foi possível detectar automaticamente o Firebird.\nSelecione manualmente a pasta.")
+
+    def _update_exe_status(self):
+        """Atualiza o status dos executáveis encontrados"""
+        firebird_path = self.conf.get("firebird_path", "")
+        if not firebird_path or not os.path.exists(firebird_path):
+            self.exe_status_label.config(text="❌ Pasta do Firebird não configurada ou inválida")
+            return
+        
+        executables = find_firebird_executables(firebird_path)
+        
+        found = []
+        missing = []
+        
+        for exe_name, exe_path in executables.items():
+            if exe_path:
+                found.append(exe_name.replace('_path', ''))
+            else:
+                missing.append(exe_name.replace('_path', ''))
+        
+        status_parts = []
+        if found:
+            status_parts.append(f"✅ {', '.join(found)}")
+        if missing:
+            status_parts.append(f"❌ {', '.join(missing)}")
+        
+        if status_parts:
+            self.exe_status_label.config(text=" | ".join(status_parts))
+        else:
+            self.exe_status_label.config(text="❌ Nenhum executável encontrado")
 
     def pick_dir(self, var):
         """Seleciona diretório"""
