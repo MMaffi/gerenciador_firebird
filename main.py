@@ -2662,7 +2662,7 @@ class GerenciadorFirebirdApp(tk.Tk):
         ):
             return
 
-        # Cria pasta temporária na mesma pasta do banco
+        # Cria pasta temporária
         db_path = Path(db)
         temp_dir = db_path.parent / f"temp_index_recalc_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
         
@@ -2670,12 +2670,12 @@ class GerenciadorFirebirdApp(tk.Tk):
             # Cria o diretório temporário
             temp_dir.mkdir(exist_ok=True)
             
-            # Cria arquivo SQL temporário na pasta do banco
+            # Cria arquivo SQL temporário
             temp_sql_file = temp_dir / f"recalc_indexes.sql"
             
-            # Script SQL simplificado e compatível
+            # Script SQL
             sql_script = """
-    -- Método simplificado para Firebird 2.5
+    -- Método para recálculo dos índices
     -- Força recálculo de estatísticas limpando os valores existentes
     UPDATE RDB$INDICES 
     SET RDB$STATISTICS = NULL 
@@ -2707,17 +2707,15 @@ class GerenciadorFirebirdApp(tk.Tk):
             ]
             
             def cleanup_temp_files():
-                """Limpa arquivos temporários de forma segura"""
+                """Limpa arquivos temporários"""
                 try:
                     if temp_dir.exists():
-                        # Remove todos os arquivos dentro do diretório
                         for file in temp_dir.glob("*"):
                             try:
                                 file.unlink()
                             except Exception as e:
                                 self.log(f"⚠️ Não foi possível remover {file}: {e}", "warning")
                         
-                        # Remove o diretório
                         temp_dir.rmdir()
                         self.log(f"🗑️ Pasta temporária removida: {temp_dir}", "info")
                 except Exception as e:
