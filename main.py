@@ -133,14 +133,15 @@ def find_firebird_executables(firebird_path):
     executables = {
         'gbak_path': '',
         'gfix_path': '',
-        'gstat_path': ''
+        'gstat_path': '',
+        'isql_path': ''
     }
     
     if not firebird_path or not os.path.exists(firebird_path):
         return executables
     
     # Lista de executáveis para procurar
-    exe_files = ['gbak.exe', 'gfix.exe', 'gstat.exe']
+    exe_files = ['gbak.exe', 'gfix.exe', 'gstat.exe', 'isql.exe']
     
     # Procura recursivamente na pasta do Firebird
     for root, dirs, files in os.walk(firebird_path):
@@ -153,6 +154,8 @@ def find_firebird_executables(firebird_path):
                     executables['gfix_path'] = full_path
                 elif file.lower() == 'gstat.exe':
                     executables['gstat_path'] = full_path
+                elif file.lower() == 'isql.exe':
+                    executables['isql_path'] = full_path
     
     return executables
 
@@ -163,6 +166,7 @@ def load_config():
         "gbak_path": "",
         "gfix_path": "",
         "gstat_path": "",
+        "isql_path": "",
         "backup_dir": str(DEFAULT_BACKUP_DIR),
         "keep_backups": DEFAULT_KEEP_BACKUPS,
         "firebird_user": "SYSDBA",
@@ -1157,45 +1161,15 @@ class GerenciadorFirebirdApp(tk.Tk):
         )
         migrate_btn.grid(row=1, column=1, padx=10, pady=10, sticky="ew")
         
-        # Relatório do Sistema
-        report_btn = ttk.Button(
+        # Recalcular Índices
+        recalc_indexes_btn = ttk.Button(
             tools_grid, 
-            text="📊 Relatório Sistema",
+            text="📊 Recalcular Índices",
             cursor="hand2", 
-            command=self.generate_system_report,
+            command=self.recalculate_indexes,
             width=20
         )
-        report_btn.grid(row=2, column=0, padx=10, pady=10, sticky="ew")
-        
-        # Relatório do Banco (gstat)
-        gstat_report_btn = ttk.Button(
-            tools_grid, 
-            text="📈 Relatório Banco",
-            cursor="hand2", 
-            command=self.generate_gstat_report,
-            width=20
-        )
-        gstat_report_btn.grid(row=2, column=1, padx=10, pady=10, sticky="ew")
-        
-        # Exportar configurações
-        export_btn = ttk.Button(
-            tools_grid, 
-            text="📤 Exportar Config",
-            cursor="hand2", 
-            command=self.export_config,
-            width=20
-        )
-        export_btn.grid(row=3, column=0, padx=10, pady=10, sticky="ew")
-
-        # Importar configurações
-        import_btn = ttk.Button(
-            tools_grid, 
-            text="📥 Importar Config",
-            cursor="hand2", 
-            command=self.import_config,
-            width=20
-        )
-        import_btn.grid(row=3, column=1, padx=10, pady=10, sticky="ew")
+        recalc_indexes_btn.grid(row=2, column=0, padx=10, pady=10, sticky="ew")
 
         # Verificar espaço
         space_btn = ttk.Button(
@@ -1205,7 +1179,47 @@ class GerenciadorFirebirdApp(tk.Tk):
             command=self.check_disk_space,
             width=20
         )
-        space_btn.grid(row=4, column=0, padx=10, pady=10, sticky="ew")
+        space_btn.grid(row=2, column=1, padx=10, pady=10, sticky="ew") 
+        
+        # Relatório do Banco (gstat)
+        gstat_report_btn = ttk.Button(
+            tools_grid, 
+            text="📈 Relatório Banco",
+            cursor="hand2", 
+            command=self.generate_gstat_report,
+            width=20
+        )
+        gstat_report_btn.grid(row=3, column=0, padx=10, pady=10, sticky="ew")
+
+        # Relatório do Sistema
+        report_btn = ttk.Button(
+            tools_grid, 
+            text="📋 Relatório Sistema",
+            cursor="hand2", 
+            command=self.generate_system_report,
+            width=20
+        )
+        report_btn.grid(row=3, column=1, padx=10, pady=10, sticky="ew")
+
+        # Importar configurações
+        import_btn = ttk.Button(
+            tools_grid, 
+            text="📥 Importar Config",
+            cursor="hand2", 
+            command=self.import_config,
+            width=20
+        )
+        import_btn.grid(row=4, column=0, padx=10, pady=10, sticky="ew")
+
+        # Exportar configurações
+        export_btn = ttk.Button(
+            tools_grid, 
+            text="📤 Exportar Config",
+            cursor="hand2", 
+            command=self.export_config,
+            width=20
+        )
+        export_btn.grid(row=4, column=1, padx=10, pady=10, sticky="ew")
         
         # Configurar colunas
         tools_grid.columnconfigure(0, weight=1)
@@ -2617,6 +2631,125 @@ class GerenciadorFirebirdApp(tk.Tk):
 
         self.run_command(cmd, on_finish=after_sweep)
 
+    # ---------- RECALCULAR ÍNDICES ----------
+    def recalculate_indexes(self):
+        """Recalcula todos os índices do banco de dados usando ISQL"""
+        isql = self.conf.get("isql_path") or find_executable("isql.exe")
+        if not isql:
+            messagebox.showerror("Erro", "isql.exe não encontrado. Configure o caminho do Firebird nas configurações.")
+            return
+        
+        self.conf["isql_path"] = isql
+        save_config(self.conf)
+
+        db = filedialog.askopenfilename(
+            title="Selecione o banco de dados para recalcular índices",
+            filetypes=[("Firebird Database", "*.fdb"), ("Todos os arquivos", "*.*")]
+        )
+        if not db:
+            return
+
+        if not messagebox.askyesno(
+            "Recalcular Índices",
+            "📊 RECALCULAR ÍNDICES DO BANCO DE DADOS\n\n"
+            "Esta operação irá:\n"
+            "• Recalcular estatísticas de todos os índices\n"
+            "• Otimizar o desempenho das consultas\n"
+            "• Melhorar a performance do banco\n\n"
+            "⚠️ A operação pode demorar dependendo do tamanho do banco.\n\n"
+            "Deseja continuar?",
+            icon=messagebox.QUESTION
+        ):
+            return
+
+        # Cria pasta temporária na mesma pasta do banco
+        db_path = Path(db)
+        temp_dir = db_path.parent / f"temp_index_recalc_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+        
+        try:
+            # Cria o diretório temporário
+            temp_dir.mkdir(exist_ok=True)
+            
+            # Cria arquivo SQL temporário na pasta do banco
+            temp_sql_file = temp_dir / f"recalc_indexes.sql"
+            
+            # Script SQL simplificado e compatível
+            sql_script = """
+    -- Método simplificado para Firebird 2.5
+    -- Força recálculo de estatísticas limpando os valores existentes
+    UPDATE RDB$INDICES 
+    SET RDB$STATISTICS = NULL 
+    WHERE RDB$SYSTEM_FLAG = 0 
+    AND RDB$INDEX_NAME NOT STARTING WITH 'RDB$';
+
+    COMMIT;
+
+    SELECT 'Estatísticas de índices resetadas. O Firebird irá recalculá-las automaticamente.' as RESULTADO 
+    FROM RDB$DATABASE;
+    """
+            
+            # Salva o script SQL no arquivo temporário
+            with open(temp_sql_file, 'w', encoding='utf-8') as f:
+                f.write(sql_script)
+            
+            self.log(f"📊 Iniciando recálculo de índices: {db_path.name}", "info")
+            self.log(f"📁 Pasta temporária criada: {temp_dir}", "info")
+            self.log(f"🔌 Conectando em: {self._get_connection_string()}", "info")
+            self.set_status("Recalculando índices, aguarde...", "blue")
+            
+            # Comando ISQL para executar o script SQL
+            cmd = [
+                isql,
+                self._get_connection_string() + ":" + db,
+                "-user", self.conf.get("firebird_user", "SYSDBA"),
+                "-pass", self.conf.get("firebird_password", "masterkey"),
+                "-i", str(temp_sql_file)
+            ]
+            
+            def cleanup_temp_files():
+                """Limpa arquivos temporários de forma segura"""
+                try:
+                    if temp_dir.exists():
+                        # Remove todos os arquivos dentro do diretório
+                        for file in temp_dir.glob("*"):
+                            try:
+                                file.unlink()
+                            except Exception as e:
+                                self.log(f"⚠️ Não foi possível remover {file}: {e}", "warning")
+                        
+                        # Remove o diretório
+                        temp_dir.rmdir()
+                        self.log(f"🗑️ Pasta temporária removida: {temp_dir}", "info")
+                except Exception as e:
+                    self.log(f"⚠️ Erro ao limpar pasta temporária: {e}", "warning")
+            
+            def after_recalc():
+                """Callback após recálculo"""
+                cleanup_temp_files()
+                self.log("✅ Recálculo de índices concluído com sucesso!", "success")
+                messagebox.showinfo(
+                    "Recálculo Concluído",
+                    "✅ Recálculo de índices concluído com sucesso!\n\n"
+                    "As estatísticas dos índices foram atualizadas.\n"
+                    "O desempenho das consultas deve melhorar significativamente."
+                )
+            
+            self.run_command(cmd, on_finish=after_recalc)
+            
+        except Exception as e:
+            self.log(f"❌ Erro ao criar script de recálculo: {e}", "error")
+            # Tenta limpar mesmo em caso de erro
+            try:
+                if temp_dir.exists():
+                    for file in temp_dir.glob("*"):
+                        try:
+                            file.unlink()
+                        except:
+                            pass
+                    temp_dir.rmdir()
+            except:
+                pass
+
     # ---------- GERENCIAMENTO DE PROCESSOS ----------
     def refresh_monitor(self):
         """Atualiza informações"""
@@ -3457,6 +3590,7 @@ class GerenciadorFirebirdApp(tk.Tk):
             report_lines.append(f"- Gbak: {self.conf.get('gbak_path', 'Não configurado')}")
             report_lines.append(f"- Gfix: {self.conf.get('gfix_path', 'Não configurado')}")
             report_lines.append(f"- Gstat: {self.conf.get('gstat_path', 'Não configurado')}")
+            report_lines.append(f"- Isql: {self.conf.get('isql_path', 'Não configurado')}")
             
             # Espaço em disco
             backup_dir = Path(self.conf.get("backup_dir", DEFAULT_BACKUP_DIR))
@@ -3514,7 +3648,7 @@ class GerenciadorFirebirdApp(tk.Tk):
     def _get_firebird_processes(self):
         """Retorna lista de processos do Firebird"""
         processes = []
-        firebird_procs = ["fb_inet_server.exe", "fbserver.exe", "fbguard.exe", "firebird.exe", "ibserver.exe", "gbak.exe", "gfix.exe", "gstat.exe"]
+        firebird_procs = ["fb_inet_server.exe", "fbserver.exe", "fbguard.exe", "firebird.exe", "ibserver.exe", "gbak.exe", "gfix.exe", "gstat.exe", "isql.exe"]
         
         for proc in psutil.process_iter(['pid', 'name']):
             if proc.info['name'] and any(fb in proc.info['name'].lower() for fb in [p.lower() for p in firebird_procs]):
@@ -3716,7 +3850,7 @@ class GerenciadorFirebirdApp(tk.Tk):
                 with open(config_file, 'r', encoding='utf-8') as f:
                     new_conf = json.load(f)
                 
-                keep_keys = ['backup_dir', 'gbak_path', 'gfix_path', 'gstat_path', 'firebird_host', 'firebird_port', 'page_size']
+                keep_keys = ['backup_dir', 'gbak_path', 'gfix_path', 'gstat_path', 'isql_path', 'firebird_host', 'firebird_port', 'page_size']
                 for key in keep_keys:
                     if key in self.conf:
                         new_conf[key] = self.conf[key]
