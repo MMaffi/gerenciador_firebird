@@ -1232,6 +1232,97 @@ class GerenciadorFirebirdApp(tk.Tk):
         
         APP_VERSION = "2025.10.27.0916"
 
+        def abrir_janela_versao(event):
+            # Criar janela de info versão
+            janela_versao = tk.Toplevel()
+            janela_versao.title("Informações da Versão")
+            janela_versao.geometry("350x450")
+            janela_versao.resizable(False, False)
+            
+            # Centraliza
+            self.update_idletasks()
+            x = self.winfo_x() + (self.winfo_width() // 2) - 175
+            y = self.winfo_y() + (self.winfo_height() // 2) - 225
+            janela_versao.geometry(f"+{x}+{y}")
+
+            # Ícone
+            icon_path = BASE_DIR / "images" / "icon.ico"
+            if icon_path.exists():
+                janela_versao.iconbitmap(str(icon_path))
+            
+            main_frame = tk.Frame(janela_versao)
+            main_frame.pack(fill="both", expand=True, padx=20, pady=10)
+            
+            # Frame para a versão
+            versao_frame = tk.Frame(main_frame)
+            versao_frame.pack(anchor="n", fill="x", pady=10)
+            
+            # Label da versão
+            tk.Label(
+                versao_frame,
+                text=f"Versão: {APP_VERSION}",
+                font=("Arial", 12, "bold"),
+            ).pack(expand=True)
+            
+            # Frame para o botão copiar
+            copiar_frame = tk.Frame(versao_frame)
+            copiar_frame.pack(fill="x", pady=5)
+            
+            # Botão copiar versão
+            btn_copiar = ttk.Button(
+                copiar_frame,
+                text="📋 Copiar Versão",
+                cursor="hand2",
+                width=15
+            )
+            btn_copiar.pack(anchor="center")
+            
+            # Frame para os tópicos
+            topicos_frame = tk.Frame(main_frame)
+            topicos_frame.pack(fill="both", expand=True, pady=10)
+            
+            # Tópicos/Especificações da versão
+            especificacoes = [
+                            "✓ Nova configuração da pasta do Firebird",
+                            "✓ Novo arquivo de função (isql.exe)",
+                            "✓ Correção de bugs na interface",
+                            "✓ Melhoria no desempenho geral",
+                            "✓ Novo botão para abrir pasta de backup padrão",
+                            "✓ Nova função de recálculo de índices"
+                        ]
+            
+            for especificacao in especificacoes:
+                tk.Label(
+                    topicos_frame,
+                    text=especificacao,
+                    font=("Arial", 9),
+                    anchor="w",
+                    justify="left"
+                ).pack(fill="x", pady=2)
+            
+            # Frame para o botão fechar
+            button_frame = tk.Frame(main_frame)
+            button_frame.pack(side="bottom", fill="x", pady=10)
+            
+            # Botão fechar
+            ttk.Button(
+                button_frame,
+                text="❌ Fechar",
+                command=janela_versao.destroy,
+                cursor="hand2"
+            ).pack(anchor="center")
+
+            def copiar_versao():
+                janela_versao.clipboard_clear()
+                janela_versao.clipboard_append(APP_VERSION)
+                janela_versao.update()
+                
+                btn_copiar.config(text="✅ Copiado!")
+                
+                janela_versao.after(2000, lambda: btn_copiar.config(text="📋 Copiar Versão"))
+
+            btn_copiar.config(command=copiar_versao)
+
         footer_left = tk.Label(
             footer_frame,
             text="© 2025 MMaffi. Todos os direitos reservados.",
@@ -1244,13 +1335,15 @@ class GerenciadorFirebirdApp(tk.Tk):
 
         footer_right = tk.Label(
             footer_frame,
-            text=f"Versão {APP_VERSION}",
+            text=f"Versão: {APP_VERSION}",
             font=("Arial", 9),
             bg="#f5f5f5",
             fg="gray",
             anchor="e"
         )
         footer_right.pack(side="right", padx=10, pady=3)
+
+        footer_right.bind("<Double-Button-1>", abrir_janela_versao)
 
     # ---------- SISTEMA DE BANDEJA ----------
     def create_tray_icon(self):
