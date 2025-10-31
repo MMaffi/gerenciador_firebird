@@ -1255,15 +1255,15 @@ class GerenciadorFirebirdApp(tk.Tk):
         )
         report_btn.grid(row=3, column=1, padx=10, pady=10, sticky="ew")
 
-        # Verificar Atualizações
-        check_update_btn = ttk.Button(
+        # Exportar configurações
+        export_btn = ttk.Button(
             tools_grid, 
-            text="🔄 Verificar Atualizações",
+            text="📤 Exportar Config",
             cursor="hand2", 
-            command=self.check_update_manual,
+            command=self.export_config,
             width=20
         )
-        check_update_btn.grid(row=4, column=0, padx=10, pady=10, sticky="ew")
+        export_btn.grid(row=4, column=0, padx=10, pady=10, sticky="ew")
 
         # Importar configurações
         import_btn = ttk.Button(
@@ -1275,16 +1275,6 @@ class GerenciadorFirebirdApp(tk.Tk):
         )
         import_btn.grid(row=4, column=1, padx=10, pady=10, sticky="ew")
 
-        # Exportar configurações
-        export_btn = ttk.Button(
-            tools_grid, 
-            text="📤 Exportar Config",
-            cursor="hand2", 
-            command=self.export_config,
-            width=20
-        )
-        export_btn.grid(row=5, column=0, padx=10, pady=10, sticky="ew")
-        
         # Configurar colunas
         tools_grid.columnconfigure(0, weight=1)
         tools_grid.columnconfigure(1, weight=1)
