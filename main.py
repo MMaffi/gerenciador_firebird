@@ -1230,7 +1230,7 @@ class GerenciadorFirebirdApp(tk.Tk):
         footer_frame = tk.Frame(self, bg="#f5f5f5", relief="ridge", borderwidth=1)
         footer_frame.pack(side="bottom", fill="x")
         
-        APP_VERSION = "2025.10.27.0916"
+        APP_VERSION = "2025.10.31.1313"
 
         def abrir_janela_versao(event):
             # Criar janela de info versão
