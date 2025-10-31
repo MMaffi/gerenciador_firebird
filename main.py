@@ -128,12 +128,45 @@ def setup_logging():
     return logger
 
 # ---------- GERENCIADOR DE CONFIG ----------
+def find_firebird_executables(firebird_path):
+    """Encontra automaticamente os executáveis do Firebird na pasta especificada"""
+    executables = {
+        'gbak_path': '',
+        'gfix_path': '',
+        'gstat_path': '',
+        'isql_path': ''
+    }
+    
+    if not firebird_path or not os.path.exists(firebird_path):
+        return executables
+    
+    # Lista de executáveis para procurar
+    exe_files = ['gbak.exe', 'gfix.exe', 'gstat.exe', 'isql.exe']
+    
+    # Procura recursivamente na pasta do Firebird
+    for root, dirs, files in os.walk(firebird_path):
+        for file in files:
+            if file.lower() in exe_files:
+                full_path = os.path.join(root, file)
+                if file.lower() == 'gbak.exe':
+                    executables['gbak_path'] = full_path
+                elif file.lower() == 'gfix.exe':
+                    executables['gfix_path'] = full_path
+                elif file.lower() == 'gstat.exe':
+                    executables['gstat_path'] = full_path
+                elif file.lower() == 'isql.exe':
+                    executables['isql_path'] = full_path
+    
+    return executables
+
 def load_config():
     """Carrega configurações do JSON"""
     default = {
+        "firebird_path": "",
         "gbak_path": "",
         "gfix_path": "",
         "gstat_path": "",
+        "isql_path": "",
         "backup_dir": str(DEFAULT_BACKUP_DIR),
         "keep_backups": DEFAULT_KEEP_BACKUPS,
         "firebird_user": "SYSDBA",
@@ -165,6 +198,16 @@ def load_config():
             logging.info("Arquivo de configuração criado com sucesso")
         except Exception as e:
             logging.error(f"Falha ao criar config.json: {e}")
+    
+    # Se o caminho do Firebird estiver configurado, busca os executáveis automaticamente
+    if default.get("firebird_path") and os.path.exists(default["firebird_path"]):
+        executables = find_firebird_executables(default["firebird_path"])
+        
+        # Atualiza apenas se os executáveis não estiverem configurados manualmente
+        for exe_name, exe_path in executables.items():
+            if exe_path and (not default.get(exe_name) or not os.path.exists(default[exe_name])):
+                default[exe_name] = exe_path
+                logging.info(f"Executável {exe_name} encontrado automaticamente: {exe_path}")
     
     # Executa limpeza de logs ao carregar configurações
     try:
@@ -358,6 +401,15 @@ class GerenciadorFirebirdApp(tk.Tk):
             cursor="hand2"
         )
         tray_btn.pack(side="left", padx=2)
+
+        # Botão abrir pasta de backups
+        backup_folder_btn = ttk.Button(
+            controls_frame,
+            text="📁 Backups",
+            command=self.open_backup_folder,
+            cursor="hand2"
+        )
+        backup_folder_btn.pack(side="left", padx=2)
 
         # Botão configurações
         config_btn = ttk.Button(
@@ -1109,45 +1161,15 @@ class GerenciadorFirebirdApp(tk.Tk):
         )
         migrate_btn.grid(row=1, column=1, padx=10, pady=10, sticky="ew")
         
-        # Relatório do Sistema
-        report_btn = ttk.Button(
+        # Recalcular Índices
+        recalc_indexes_btn = ttk.Button(
             tools_grid, 
-            text="📊 Relatório Sistema",
+            text="📊 Recalcular Índices",
             cursor="hand2", 
-            command=self.generate_system_report,
+            command=self.recalculate_indexes,
             width=20
         )
-        report_btn.grid(row=2, column=0, padx=10, pady=10, sticky="ew")
-        
-        # Relatório do Banco (gstat)
-        gstat_report_btn = ttk.Button(
-            tools_grid, 
-            text="📈 Relatório Banco",
-            cursor="hand2", 
-            command=self.generate_gstat_report,
-            width=20
-        )
-        gstat_report_btn.grid(row=2, column=1, padx=10, pady=10, sticky="ew")
-        
-        # Exportar configurações
-        export_btn = ttk.Button(
-            tools_grid, 
-            text="📤 Exportar Config",
-            cursor="hand2", 
-            command=self.export_config,
-            width=20
-        )
-        export_btn.grid(row=3, column=0, padx=10, pady=10, sticky="ew")
-
-        # Importar configurações
-        import_btn = ttk.Button(
-            tools_grid, 
-            text="📥 Importar Config",
-            cursor="hand2", 
-            command=self.import_config,
-            width=20
-        )
-        import_btn.grid(row=3, column=1, padx=10, pady=10, sticky="ew")
+        recalc_indexes_btn.grid(row=2, column=0, padx=10, pady=10, sticky="ew")
 
         # Verificar espaço
         space_btn = ttk.Button(
@@ -1157,7 +1179,47 @@ class GerenciadorFirebirdApp(tk.Tk):
             command=self.check_disk_space,
             width=20
         )
-        space_btn.grid(row=4, column=0, padx=10, pady=10, sticky="ew")
+        space_btn.grid(row=2, column=1, padx=10, pady=10, sticky="ew") 
+        
+        # Relatório do Banco (gstat)
+        gstat_report_btn = ttk.Button(
+            tools_grid, 
+            text="📈 Relatório Banco",
+            cursor="hand2", 
+            command=self.generate_gstat_report,
+            width=20
+        )
+        gstat_report_btn.grid(row=3, column=0, padx=10, pady=10, sticky="ew")
+
+        # Relatório do Sistema
+        report_btn = ttk.Button(
+            tools_grid, 
+            text="📋 Relatório Sistema",
+            cursor="hand2", 
+            command=self.generate_system_report,
+            width=20
+        )
+        report_btn.grid(row=3, column=1, padx=10, pady=10, sticky="ew")
+
+        # Importar configurações
+        import_btn = ttk.Button(
+            tools_grid, 
+            text="📥 Importar Config",
+            cursor="hand2", 
+            command=self.import_config,
+            width=20
+        )
+        import_btn.grid(row=4, column=0, padx=10, pady=10, sticky="ew")
+
+        # Exportar configurações
+        export_btn = ttk.Button(
+            tools_grid, 
+            text="📤 Exportar Config",
+            cursor="hand2", 
+            command=self.export_config,
+            width=20
+        )
+        export_btn.grid(row=4, column=1, padx=10, pady=10, sticky="ew")
         
         # Configurar colunas
         tools_grid.columnconfigure(0, weight=1)
@@ -1168,7 +1230,98 @@ class GerenciadorFirebirdApp(tk.Tk):
         footer_frame = tk.Frame(self, bg="#f5f5f5", relief="ridge", borderwidth=1)
         footer_frame.pack(side="bottom", fill="x")
         
-        APP_VERSION = "2025.10.27.0916"
+        APP_VERSION = "2025.10.31.1313"
+
+        def abrir_janela_versao(event):
+            # Criar janela de info versão
+            janela_versao = tk.Toplevel()
+            janela_versao.title("Informações da Versão")
+            janela_versao.geometry("350x450")
+            janela_versao.resizable(False, False)
+            
+            # Centraliza
+            self.update_idletasks()
+            x = self.winfo_x() + (self.winfo_width() // 2) - 175
+            y = self.winfo_y() + (self.winfo_height() // 2) - 225
+            janela_versao.geometry(f"+{x}+{y}")
+
+            # Ícone
+            icon_path = BASE_DIR / "images" / "icon.ico"
+            if icon_path.exists():
+                janela_versao.iconbitmap(str(icon_path))
+            
+            main_frame = tk.Frame(janela_versao)
+            main_frame.pack(fill="both", expand=True, padx=20, pady=10)
+            
+            # Frame para a versão
+            versao_frame = tk.Frame(main_frame)
+            versao_frame.pack(anchor="n", fill="x", pady=10)
+            
+            # Label da versão
+            tk.Label(
+                versao_frame,
+                text=f"Versão: {APP_VERSION}",
+                font=("Arial", 12, "bold"),
+            ).pack(expand=True)
+            
+            # Frame para o botão copiar
+            copiar_frame = tk.Frame(versao_frame)
+            copiar_frame.pack(fill="x", pady=5)
+            
+            # Botão copiar versão
+            btn_copiar = ttk.Button(
+                copiar_frame,
+                text="📋 Copiar Versão",
+                cursor="hand2",
+                width=15
+            )
+            btn_copiar.pack(anchor="center")
+            
+            # Frame para os tópicos
+            topicos_frame = tk.Frame(main_frame)
+            topicos_frame.pack(fill="both", expand=True, pady=10)
+            
+            # Tópicos/Especificações da versão
+            especificacoes = [
+                            "✓ Nova configuração da pasta do Firebird",
+                            "✓ Novo arquivo de função (isql.exe)",
+                            "✓ Correção de bugs na interface",
+                            "✓ Melhoria no desempenho geral",
+                            "✓ Novo botão para abrir pasta de backup padrão",
+                            "✓ Nova função de recálculo de índices"
+                        ]
+            
+            for especificacao in especificacoes:
+                tk.Label(
+                    topicos_frame,
+                    text=especificacao,
+                    font=("Arial", 9),
+                    anchor="w",
+                    justify="left"
+                ).pack(fill="x", pady=2)
+            
+            # Frame para o botão fechar
+            button_frame = tk.Frame(main_frame)
+            button_frame.pack(side="bottom", fill="x", pady=10)
+            
+            # Botão fechar
+            ttk.Button(
+                button_frame,
+                text="❌ Fechar",
+                command=janela_versao.destroy,
+                cursor="hand2"
+            ).pack(anchor="center")
+
+            def copiar_versao():
+                janela_versao.clipboard_clear()
+                janela_versao.clipboard_append(APP_VERSION)
+                janela_versao.update()
+                
+                btn_copiar.config(text="✅ Copiado!")
+                
+                janela_versao.after(2000, lambda: btn_copiar.config(text="📋 Copiar Versão"))
+
+            btn_copiar.config(command=copiar_versao)
 
         footer_left = tk.Label(
             footer_frame,
@@ -1182,13 +1335,15 @@ class GerenciadorFirebirdApp(tk.Tk):
 
         footer_right = tk.Label(
             footer_frame,
-            text=f"Versão {APP_VERSION}",
+            text=f"Versão: {APP_VERSION}",
             font=("Arial", 9),
             bg="#f5f5f5",
             fg="gray",
             anchor="e"
         )
         footer_right.pack(side="right", padx=10, pady=3)
+
+        footer_right.bind("<Double-Button-1>", abrir_janela_versao)
 
     # ---------- SISTEMA DE BANDEJA ----------
     def create_tray_icon(self):
@@ -1445,6 +1600,31 @@ class GerenciadorFirebirdApp(tk.Tk):
         self.status_label.config(text=text, foreground=color)
         self.update_idletasks()
 
+    def open_backup_folder(self):
+        """Abre a pasta de backups padrão"""
+        try:
+            backup_dir = Path(self.conf.get("backup_dir", DEFAULT_BACKUP_DIR))
+            
+            # Verifica se o diretório existe, se não cria
+            if not backup_dir.exists():
+                backup_dir.mkdir(parents=True, exist_ok=True)
+                self.log(f"📁 Pasta de backups criada: {backup_dir}", "info")
+            
+            # Abre no explorador de arquivos
+            if open_file_with_default_app(backup_dir):
+                self.log(f"📁 Pasta de backups aberta: {backup_dir}", "success")
+            else:
+                self.log(f"❌ Não foi possível abrir a pasta: {backup_dir}", "error")
+                messagebox.showerror(
+                    "Erro", 
+                    f"Não foi possível abrir a pasta de backups:\n{backup_dir}"
+                )
+                
+        except Exception as e:
+            error_msg = f"❌ Erro ao abrir pasta de backups: {e}"
+            self.log(error_msg, "error")
+            messagebox.showerror("Erro", error_msg)
+
     def disable_buttons(self):
         """Desabilita todos os botões durante operações"""
         buttons = [self.btn_backup, self.btn_restore, self.btn_verify]
@@ -1577,7 +1757,7 @@ class GerenciadorFirebirdApp(tk.Tk):
         """Gera backup do banco de dados"""
         gbak = self.conf.get("gbak_path") or find_executable("gbak.exe")
         if not gbak:
-            messagebox.showerror("Erro", "gbak.exe não encontrado. Configure o caminho nas configurações.")
+            messagebox.showerror("Erro", "gbak.exe não encontrado. Configure o caminho do Firebird nas configurações.")
             return
         
         self.conf["gbak_path"] = gbak
@@ -1855,7 +2035,7 @@ class GerenciadorFirebirdApp(tk.Tk):
         """Restaura backup para banco de dados"""
         gbak = self.conf.get("gbak_path") or find_executable("gbak.exe")
         if not gbak:
-            messagebox.showerror("Erro", "gbak.exe não encontrado. Configure o caminho nas configurações.")
+            messagebox.showerror("Erro", "gbak.exe não encontrado. Configure o caminho do Firebird nas configurações.")
             return
         
         self.conf["gbak_path"] = gbak
@@ -2100,7 +2280,7 @@ class GerenciadorFirebirdApp(tk.Tk):
         """Verifica integridade do banco"""
         gfix = self.conf.get("gfix_path") or find_executable("gfix.exe")
         if not gfix:
-            messagebox.showerror("Erro", "gfix.exe não encontrado. Configure o caminho nas configurações.")
+            messagebox.showerror("Erro", "gfix.exe não encontrado. Configure o caminho do Firebird nas configurações.")
             return
         
         self.conf["gfix_path"] = gfix
@@ -2387,7 +2567,7 @@ class GerenciadorFirebirdApp(tk.Tk):
         """Executa correção completa do banco de dados"""
         gfix = self.conf.get("gfix_path") or find_executable("gfix.exe")
         if not gfix:
-            messagebox.showerror("Erro", "gfix.exe não encontrado. Configure o caminho nas configurações.")
+            messagebox.showerror("Erro", "gfix.exe não encontrado. Configure o caminho do Firebird nas configurações.")
             return
         
         self.conf["gfix_path"] = gfix
@@ -2499,7 +2679,7 @@ class GerenciadorFirebirdApp(tk.Tk):
         """Executa a limpeza (sweep) do banco de dados"""
         gfix = self.conf.get("gfix_path") or find_executable("gfix.exe")
         if not gfix:
-            messagebox.showerror("Erro", "gfix.exe não encontrado. Configure o caminho nas configurações.")
+            messagebox.showerror("Erro", "gfix.exe não encontrado. Configure o caminho do Firebird nas configurações.")
             return
         
         self.conf["gfix_path"] = gfix
@@ -2543,6 +2723,123 @@ class GerenciadorFirebirdApp(tk.Tk):
             )
 
         self.run_command(cmd, on_finish=after_sweep)
+
+    # ---------- RECALCULAR ÍNDICES ----------
+    def recalculate_indexes(self):
+        """Recalcula todos os índices do banco de dados usando ISQL"""
+        isql = self.conf.get("isql_path") or find_executable("isql.exe")
+        if not isql:
+            messagebox.showerror("Erro", "isql.exe não encontrado. Configure o caminho do Firebird nas configurações.")
+            return
+        
+        self.conf["isql_path"] = isql
+        save_config(self.conf)
+
+        db = filedialog.askopenfilename(
+            title="Selecione o banco de dados para recalcular índices",
+            filetypes=[("Firebird Database", "*.fdb"), ("Todos os arquivos", "*.*")]
+        )
+        if not db:
+            return
+
+        if not messagebox.askyesno(
+            "Recalcular Índices",
+            "📊 RECALCULAR ÍNDICES DO BANCO DE DADOS\n\n"
+            "Esta operação irá:\n"
+            "• Recalcular estatísticas de todos os índices\n"
+            "• Otimizar o desempenho das consultas\n"
+            "• Melhorar a performance do banco\n\n"
+            "⚠️ A operação pode demorar dependendo do tamanho do banco.\n\n"
+            "Deseja continuar?",
+            icon=messagebox.QUESTION
+        ):
+            return
+
+        # Cria pasta temporária
+        db_path = Path(db)
+        temp_dir = db_path.parent / f"temp_index_recalc_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+        
+        try:
+            # Cria o diretório temporário
+            temp_dir.mkdir(exist_ok=True)
+            
+            # Cria arquivo SQL temporário
+            temp_sql_file = temp_dir / f"recalc_indexes.sql"
+            
+            # Script SQL
+            sql_script = """
+    -- Método para recálculo dos índices
+    -- Força recálculo de estatísticas limpando os valores existentes
+    UPDATE RDB$INDICES 
+    SET RDB$STATISTICS = NULL 
+    WHERE RDB$SYSTEM_FLAG = 0 
+    AND RDB$INDEX_NAME NOT STARTING WITH 'RDB$';
+
+    COMMIT;
+
+    SELECT 'Estatísticas de índices resetadas. O Firebird irá recalculá-las automaticamente.' as RESULTADO 
+    FROM RDB$DATABASE;
+    """
+            
+            # Salva o script SQL no arquivo temporário
+            with open(temp_sql_file, 'w', encoding='utf-8') as f:
+                f.write(sql_script)
+            
+            self.log(f"📊 Iniciando recálculo de índices: {db_path.name}", "info")
+            self.log(f"📁 Pasta temporária criada: {temp_dir}", "info")
+            self.log(f"🔌 Conectando em: {self._get_connection_string()}", "info")
+            self.set_status("Recalculando índices, aguarde...", "blue")
+            
+            # Comando ISQL para executar o script SQL
+            cmd = [
+                isql,
+                self._get_connection_string() + ":" + db,
+                "-user", self.conf.get("firebird_user", "SYSDBA"),
+                "-pass", self.conf.get("firebird_password", "masterkey"),
+                "-i", str(temp_sql_file)
+            ]
+            
+            def cleanup_temp_files():
+                """Limpa arquivos temporários"""
+                try:
+                    if temp_dir.exists():
+                        for file in temp_dir.glob("*"):
+                            try:
+                                file.unlink()
+                            except Exception as e:
+                                self.log(f"⚠️ Não foi possível remover {file}: {e}", "warning")
+                        
+                        temp_dir.rmdir()
+                        self.log(f"🗑️ Pasta temporária removida: {temp_dir}", "info")
+                except Exception as e:
+                    self.log(f"⚠️ Erro ao limpar pasta temporária: {e}", "warning")
+            
+            def after_recalc():
+                """Callback após recálculo"""
+                cleanup_temp_files()
+                self.log("✅ Recálculo de índices concluído com sucesso!", "success")
+                messagebox.showinfo(
+                    "Recálculo Concluído",
+                    "✅ Recálculo de índices concluído com sucesso!\n\n"
+                    "As estatísticas dos índices foram atualizadas.\n"
+                    "O desempenho das consultas deve melhorar significativamente."
+                )
+            
+            self.run_command(cmd, on_finish=after_recalc)
+            
+        except Exception as e:
+            self.log(f"❌ Erro ao criar script de recálculo: {e}", "error")
+            # Tenta limpar mesmo em caso de erro
+            try:
+                if temp_dir.exists():
+                    for file in temp_dir.glob("*"):
+                        try:
+                            file.unlink()
+                        except:
+                            pass
+                    temp_dir.rmdir()
+            except:
+                pass
 
     # ---------- GERENCIAMENTO DE PROCESSOS ----------
     def refresh_monitor(self):
@@ -3170,7 +3467,7 @@ class GerenciadorFirebirdApp(tk.Tk):
         """Executa operações de otimização no banco"""
         gfix = self.conf.get("gfix_path") or find_executable("gfix.exe")
         if not gfix:
-            messagebox.showerror("Erro", "gfix.exe não encontrado.")
+            messagebox.showerror("Erro", "gfix.exe não encontrado. Configure o caminho do Firebird nas configurações.")
             return
         
         db = filedialog.askopenfilename(title="Selecione o banco para otimizar")
@@ -3204,7 +3501,7 @@ class GerenciadorFirebirdApp(tk.Tk):
         """Migra banco entre versões do Firebird"""
         gbak = self.conf.get("gbak_path") or find_executable("gbak.exe")
         if not gbak:
-            messagebox.showerror("Erro", "gbak.exe não encontrado.")
+            messagebox.showerror("Erro", "gbak.exe não encontrado. Configure o caminho do Firebird nas configurações.")
             return
         
         source_db = filedialog.askopenfilename(title="Selecione o banco para migrar")
@@ -3258,7 +3555,7 @@ class GerenciadorFirebirdApp(tk.Tk):
         """Gera relatório detalhado do banco"""
         gstat = self.conf.get("gstat_path") or find_executable("gstat.exe")
         if not gstat:
-            messagebox.showerror("Erro", "gstat.exe não encontrado. Configure o caminho nas configurações.")
+            messagebox.showerror("Erro", "gstat.exe não encontrado. Configure o caminho do Firebird nas configurações.")
             return
         
         self.conf["gstat_path"] = gstat
@@ -3384,6 +3681,7 @@ class GerenciadorFirebirdApp(tk.Tk):
             report_lines.append(f"- Gbak: {self.conf.get('gbak_path', 'Não configurado')}")
             report_lines.append(f"- Gfix: {self.conf.get('gfix_path', 'Não configurado')}")
             report_lines.append(f"- Gstat: {self.conf.get('gstat_path', 'Não configurado')}")
+            report_lines.append(f"- Isql: {self.conf.get('isql_path', 'Não configurado')}")
             
             # Espaço em disco
             backup_dir = Path(self.conf.get("backup_dir", DEFAULT_BACKUP_DIR))
@@ -3441,7 +3739,7 @@ class GerenciadorFirebirdApp(tk.Tk):
     def _get_firebird_processes(self):
         """Retorna lista de processos do Firebird"""
         processes = []
-        firebird_procs = ["fb_inet_server.exe", "fbserver.exe", "fbguard.exe", "firebird.exe", "ibserver.exe", "gbak.exe", "gfix.exe", "gstat.exe"]
+        firebird_procs = ["fb_inet_server.exe", "fbserver.exe", "fbguard.exe", "firebird.exe", "ibserver.exe", "gbak.exe", "gfix.exe", "gstat.exe", "isql.exe"]
         
         for proc in psutil.process_iter(['pid', 'name']):
             if proc.info['name'] and any(fb in proc.info['name'].lower() for fb in [p.lower() for p in firebird_procs]):
@@ -3643,7 +3941,7 @@ class GerenciadorFirebirdApp(tk.Tk):
                 with open(config_file, 'r', encoding='utf-8') as f:
                     new_conf = json.load(f)
                 
-                keep_keys = ['backup_dir', 'gbak_path', 'gfix_path', 'gstat_path', 'firebird_host', 'firebird_port', 'page_size']
+                keep_keys = ['backup_dir', 'gbak_path', 'gfix_path', 'gstat_path', 'isql_path', 'firebird_host', 'firebird_port', 'page_size']
                 for key in keep_keys:
                     if key in self.conf:
                         new_conf[key] = self.conf[key]
@@ -3691,33 +3989,31 @@ class GerenciadorFirebirdApp(tk.Tk):
         firebird_frame = ttk.Frame(notebook, padding=10)
         notebook.add(firebird_frame, text="Firebird")
 
-        ttk.Label(firebird_frame, text="Local do gbak.exe:").grid(row=0, column=0, sticky="w", pady=8)
-        gbak_var = tk.StringVar(value=self.conf.get("gbak_path", ""))
-        gbak_entry = ttk.Entry(firebird_frame, textvariable=gbak_var, width=40)
-        gbak_entry.grid(row=0, column=1, padx=5)
-        ttk.Button(firebird_frame, text="...", width=3, 
-                  command=lambda: self.pick_exe(gbak_var, "gbak.exe")).grid(row=0, column=2)
+        # Caminho da pasta do Firebird
+        ttk.Label(firebird_frame, text="Pasta do Firebird:*", font=("Arial", 9, "bold")).grid(row=0, column=0, sticky="w", pady=8)
+        firebird_path_var = tk.StringVar(value=self.conf.get("firebird_path", ""))
+        firebird_path_entry = ttk.Entry(firebird_frame, textvariable=firebird_path_var, width=40)
+        firebird_path_entry.grid(row=0, column=1, padx=5)
+        ttk.Button(firebird_frame, text="📁", width=3, 
+                  command=lambda: self.pick_firebird_folder(firebird_path_var)).grid(row=0, column=2)
 
-        ttk.Label(firebird_frame, text="Local do gfix.exe:").grid(row=1, column=0, sticky="w", pady=8)
-        gfix_var = tk.StringVar(value=self.conf.get("gfix_path", ""))
-        gfix_entry = ttk.Entry(firebird_frame, textvariable=gfix_var, width=40)
-        gfix_entry.grid(row=1, column=1, padx=5)
-        ttk.Button(firebird_frame, text="...", width=3,
-                  command=lambda: self.pick_exe(gfix_var, "gfix.exe")).grid(row=1, column=2)
+        # Botão para buscar automaticamente
+        ttk.Button(firebird_frame, text="🔍 Buscar Automaticamente", 
+                  command=lambda: self.auto_detect_firebird(firebird_path_var),
+                  cursor="hand2").grid(row=1, column=1, sticky="w", padx=5, pady=5)
 
-        # Caminho do gstat.exe
-        ttk.Label(firebird_frame, text="Local do gstat.exe:").grid(row=2, column=0, sticky="w", pady=8)
-        gstat_var = tk.StringVar(value=self.conf.get("gstat_path", ""))
-        gstat_entry = ttk.Entry(firebird_frame, textvariable=gstat_var, width=40)
-        gstat_entry.grid(row=2, column=1, padx=5)
-        ttk.Button(firebird_frame, text="...", width=3,
-                  command=lambda: self.pick_exe(gstat_var, "gstat.exe")).grid(row=2, column=2)
+        # Status dos executáveis encontrados
+        self.exe_status_label = ttk.Label(firebird_frame, text="", foreground="gray", font=("Arial", 8))
+        self.exe_status_label.grid(row=2, column=0, columnspan=3, sticky="w", pady=(0, 10))
+
+        # Atualiza status inicial
+        self._update_exe_status()
 
         ttk.Label(firebird_frame, text="Pasta de backups:").grid(row=3, column=0, sticky="w", pady=8)
         backup_var = tk.StringVar(value=self.conf.get("backup_dir", ""))
         backup_entry = ttk.Entry(firebird_frame, textvariable=backup_var, width=40)
         backup_entry.grid(row=3, column=1, padx=5)
-        ttk.Button(firebird_frame, text="...", width=3,
+        ttk.Button(firebird_frame, text="📁", width=3,
                   command=lambda: self.pick_dir(backup_var)).grid(row=3, column=2)
 
         ttk.Label(firebird_frame, text="Host do Firebird:").grid(row=4, column=0, sticky="w", pady=8)
@@ -3783,10 +4079,20 @@ class GerenciadorFirebirdApp(tk.Tk):
         btn_frame.pack(pady=10)
 
         def save_all_config():
+            # Atualiza o caminho do Firebird primeiro
+            new_firebird_path = firebird_path_var.get().strip()
+            
+            # Se o caminho do Firebird mudou, busca os executáveis novamente
+            if new_firebird_path != self.conf.get("firebird_path", ""):
+                self.conf["firebird_path"] = new_firebird_path
+                if new_firebird_path and os.path.exists(new_firebird_path):
+                    executables = find_firebird_executables(new_firebird_path)
+                    # Atualiza os caminhos dos executáveis
+                    for exe_name, exe_path in executables.items():
+                        if exe_path:
+                            self.conf[exe_name] = exe_path
+            
             self.conf.update({
-                "gbak_path": gbak_var.get(),
-                "gfix_path": gfix_var.get(),
-                "gstat_path": gstat_var.get(),
                 "backup_dir": backup_var.get(),
                 "firebird_host": host_var.get(),
                 "firebird_port": port_var.get(),
@@ -3804,10 +4110,8 @@ class GerenciadorFirebirdApp(tk.Tk):
             if save_config(self.conf):
                 # Aplica a configuração de inicialização com Windows
                 self.apply_startup_setting(startup_var.get())
-                # Executa limpeza de logs
                 try:
                     cleanup_old_logs(LOG_FILE, log_retention_var.get())
-                    self.log(f"🧹 Configuração de logs atualizada: {log_retention_var.get()} dias", "info")
                 except Exception as e:
                     self.log(f"⚠️ Erro na limpeza de logs: {e}", "warning")
                 
@@ -3824,14 +4128,74 @@ class GerenciadorFirebirdApp(tk.Tk):
                   command=win.destroy,
                   cursor="hand2").pack(side="left", padx=10)
 
-    def pick_exe(self, var, exe_name):
-        """Seleciona executável"""
-        path = filedialog.askopenfilename(
-            title=f"Selecione {exe_name}", 
-            filetypes=[("Executável", "*.exe"), ("Todos os arquivos", "*.*")]
-        )
+        # Atualiza status quando o caminho do Firebird muda
+        def on_firebird_path_change(*args):
+            self.after(500, self._update_exe_status)
+        
+        firebird_path_var.trace("w", on_firebird_path_change)
+
+    def pick_firebird_folder(self, var):
+        """Seleciona pasta do Firebird"""
+        path = filedialog.askdirectory(title="Selecione a pasta do Firebird")
         if path:
             var.set(path)
+
+    def auto_detect_firebird(self, var):
+        """Tenta detectar automaticamente a pasta do Firebird"""
+        common_paths = [
+            "C:\\Program Files\\Firebird",
+            "C:\\Program Files (x86)\\Firebird", 
+            "C:\\Firebird",
+            "D:\\Firebird",
+            "E:\\Firebird"
+        ]
+        
+        for path in common_paths:
+            if os.path.exists(path):
+                var.set(path)
+                self.log(f"🔍 Firebird detectado automaticamente: {path}", "info")
+                messagebox.showinfo("Detecção Automática", f"Firebird encontrado em:\n{path}")
+                return
+        
+        # Se não encontrou, tenta encontrar no PATH
+        gbak_path = find_executable("gbak.exe")
+        if gbak_path:
+            firebird_dir = os.path.dirname(os.path.dirname(gbak_path))
+            var.set(firebird_dir)
+            self.log(f"🔍 Firebird detectado via PATH: {firebird_dir}", "info")
+            messagebox.showinfo("Detecção Automática", f"Firebird encontrado via PATH:\n{firebird_dir}")
+            return
+        
+        messagebox.showinfo("Detecção Automática", "Não foi possível detectar automaticamente o Firebird.\nSelecione manualmente a pasta.")
+
+    def _update_exe_status(self):
+        """Atualiza o status dos executáveis encontrados"""
+        firebird_path = self.conf.get("firebird_path", "")
+        if not firebird_path or not os.path.exists(firebird_path):
+            self.exe_status_label.config(text="❌ Pasta do Firebird não configurada ou inválida")
+            return
+        
+        executables = find_firebird_executables(firebird_path)
+        
+        found = []
+        missing = []
+        
+        for exe_name, exe_path in executables.items():
+            if exe_path:
+                found.append(exe_name.replace('_path', ''))
+            else:
+                missing.append(exe_name.replace('_path', ''))
+        
+        status_parts = []
+        if found:
+            status_parts.append(f"✅ {', '.join(found)}")
+        if missing:
+            status_parts.append(f"❌ {', '.join(missing)}")
+        
+        if status_parts:
+            self.exe_status_label.config(text=" | ".join(status_parts))
+        else:
+            self.exe_status_label.config(text="❌ Nenhum executável encontrado")
 
     def pick_dir(self, var):
         """Seleciona diretório"""
