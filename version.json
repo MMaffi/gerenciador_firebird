@@ -1,0 +1,5 @@
+{
+    "latest_version": "2025.10.27.0916",
+    "download_url": "https://github.com/MMaffi/gerenciador_firebird/releases/latest",
+    "release_notes": "✓ Nova configuração da pasta do Firebird\n✓ Novo arquivo de função (isql.exe)\n✓ Correção de bugs na interface\n✓ Melhoria no desempenho geral\n✓ Novo botão para abrir pasta de backup padrão\n✓ Nova função de recálculo de índices\n✓ Sistema de verificação de atualizações automático"
+}
