@@ -64,6 +64,10 @@ DEFAULT_BACKUP_DIR = BASE_DIR / "backups"
 DEFAULT_KEEP_BACKUPS = 5
 REPORTS_DIR = BASE_DIR / "Relatórios"
 
+# Constantes para controle de versão
+APP_VERSION = "2025.10.31.1313"
+VERSION_CHECK_URL = "https://raw.githubusercontent.com/MMaffi/gerenciador_firebird/main/version.json"
+
 # Opções disponíveis de pageSize
 PAGE_SIZE_OPTIONS = [
     "1024",  
@@ -127,6 +131,43 @@ def setup_logging():
     
     return logger
 
+# ---------- VERIFICAÇÃO DE ATUALIZAÇÕES ----------
+def check_for_updates(conf):
+    """Verifica se há uma nova versão disponível SEMPRE ao iniciar"""
+    try:
+        # Verifica se o usuário ignorou esta versão
+        ignored_version = conf.get("ignored_version")
+        
+        conf["last_update_check"] = datetime.now().isoformat()
+        save_config(conf)
+        
+        import urllib.request
+        import json as json_lib
+        
+        response = urllib.request.urlopen(VERSION_CHECK_URL, timeout=10)
+        data = json_lib.loads(response.read().decode())
+        
+        latest_version = data.get("latest_version")
+        download_url = data.get("download_url")
+        release_notes = data.get("release_notes", "")
+        
+        # Verifica se há uma nova versão e se não foi ignorada
+        if (latest_version and 
+            latest_version != APP_VERSION and 
+            latest_version != ignored_version):
+            return {
+                "current_version": APP_VERSION,
+                "latest_version": latest_version,
+                "download_url": download_url,
+                "release_notes": release_notes
+            }
+        
+        return None
+        
+    except Exception as e:
+        logging.error(f"Erro ao verificar atualizações: {e}")
+        return None
+
 # ---------- GERENCIADOR DE CONFIG ----------
 def find_firebird_executables(firebird_path):
     """Encontra automaticamente os executáveis do Firebird na pasta especificada"""
@@ -179,7 +220,9 @@ def load_config():
         "minimize_to_tray": True,
         "start_with_windows": False,
         "scheduled_backups": [],
-        "log_retention_days": 30
+        "log_retention_days": 30,
+        "last_update_check": None,
+        "ignored_version": None
     }
     
     if CONFIG_PATH.exists():
@@ -348,6 +391,8 @@ class GerenciadorFirebirdApp(tk.Tk):
             
             self.logger.info("Gerenciador Firebird iniciado com sucesso")
             
+            self.after(3000, self.check_and_notify_update)
+            
         except Exception as e:
             self.logger.critical(f"Falha crítica ao iniciar aplicação: {e}")
             messagebox.showerror("Erro Fatal", f"Falha ao iniciar aplicação:\n{e}")
@@ -410,6 +455,15 @@ class GerenciadorFirebirdApp(tk.Tk):
             cursor="hand2"
         )
         backup_folder_btn.pack(side="left", padx=2)
+
+        # Botão verificar atualizações
+        update_btn = ttk.Button(
+            controls_frame,
+            text="🔄 Verificar Atualizações",
+            command=self.check_update_manual,
+            cursor="hand2"
+        )
+        update_btn.pack(side="left", padx=2)
 
         # Botão configurações
         config_btn = ttk.Button(
@@ -1201,6 +1255,16 @@ class GerenciadorFirebirdApp(tk.Tk):
         )
         report_btn.grid(row=3, column=1, padx=10, pady=10, sticky="ew")
 
+        # Verificar Atualizações
+        check_update_btn = ttk.Button(
+            tools_grid, 
+            text="🔄 Verificar Atualizações",
+            cursor="hand2", 
+            command=self.check_update_manual,
+            width=20
+        )
+        check_update_btn.grid(row=4, column=0, padx=10, pady=10, sticky="ew")
+
         # Importar configurações
         import_btn = ttk.Button(
             tools_grid, 
@@ -1209,7 +1273,7 @@ class GerenciadorFirebirdApp(tk.Tk):
             command=self.import_config,
             width=20
         )
-        import_btn.grid(row=4, column=0, padx=10, pady=10, sticky="ew")
+        import_btn.grid(row=4, column=1, padx=10, pady=10, sticky="ew")
 
         # Exportar configurações
         export_btn = ttk.Button(
@@ -1219,7 +1283,7 @@ class GerenciadorFirebirdApp(tk.Tk):
             command=self.export_config,
             width=20
         )
-        export_btn.grid(row=4, column=1, padx=10, pady=10, sticky="ew")
+        export_btn.grid(row=5, column=0, padx=10, pady=10, sticky="ew")
         
         # Configurar colunas
         tools_grid.columnconfigure(0, weight=1)
@@ -1229,8 +1293,6 @@ class GerenciadorFirebirdApp(tk.Tk):
         """Cria rodapé da aplicação"""
         footer_frame = tk.Frame(self, bg="#f5f5f5", relief="ridge", borderwidth=1)
         footer_frame.pack(side="bottom", fill="x")
-        
-        APP_VERSION = "2025.10.31.1313"
 
         def abrir_janela_versao(event):
             # Criar janela de info versão
@@ -1288,7 +1350,8 @@ class GerenciadorFirebirdApp(tk.Tk):
                             "✓ Correção de bugs na interface",
                             "✓ Melhoria no desempenho geral",
                             "✓ Novo botão para abrir pasta de backup padrão",
-                            "✓ Nova função de recálculo de índices"
+                            "✓ Nova função de recálculo de índices",
+                            "✓ Sistema de verificação de atualizações automático"
                         ]
             
             for especificacao in especificacoes:
@@ -1344,6 +1407,153 @@ class GerenciadorFirebirdApp(tk.Tk):
         footer_right.pack(side="right", padx=10, pady=3)
 
         footer_right.bind("<Double-Button-1>", abrir_janela_versao)
+
+    # ---------- SISTEMA DE VERIFICAÇÃO DE ATUALIZAÇÕES ----------
+    def check_and_notify_update(self):
+        try:
+            update_info = check_for_updates(self.conf)
+            
+            if update_info:
+                self.show_update_notification(update_info)
+            else:
+                if self.dev_mode:
+                    self.log("✅ Você está na versão mais recente", "info")
+                    
+        except Exception as e:
+            self.log(f"⚠️ Verificação de atualização falhou: {e}", "debug")
+
+    def check_update_manual(self):
+        """Verificação manual de atualizações"""
+        self.log("🔍 Verificando atualizações manualmente...", "info")
+        
+        self.conf["last_update_check"] = None
+        update_info = check_for_updates(self.conf)
+        
+        if update_info:
+            self.show_update_notification(update_info)
+        else:
+            messagebox.showinfo("Verificação de Atualização", "✅ Você está usando a versão mais recente!")
+
+    def show_update_notification(self, update_info):
+        """Mostra janela de notificação de atualização"""
+        update_win = tk.Toplevel(self)
+        update_win.title("📢 Atualização Disponível!")
+        update_win.geometry("600x500")
+        update_win.resizable(True, True)
+        update_win.transient(self)
+        update_win.grab_set()
+        
+        # Centraliza
+        self.update_idletasks()
+        x = self.winfo_x() + (self.winfo_width() // 2) - 300
+        y = self.winfo_y() + (self.winfo_height() // 2) - 200
+        update_win.geometry(f"+{x}+{y}")
+        
+        # Ícone
+        icon_path = BASE_DIR / "images" / "icon.ico"
+        if icon_path.exists():
+            update_win.iconbitmap(str(icon_path))
+        
+        # Frame principal
+        main_frame = ttk.Frame(update_win, padding=20)
+        main_frame.pack(fill="both", expand=True)
+        
+        # Cabeçalho
+        header_frame = ttk.Frame(main_frame)
+        header_frame.pack(fill="x", pady=(0, 15))
+        
+        ttk.Label(
+            header_frame,
+            text="🎉 NOVA VERSÃO DISPONÍVEL!",
+            font=("Arial", 16, "bold"),
+            foreground="green"
+        ).pack()
+        
+        ttk.Label(
+            header_frame,
+            text="Uma versão mais recente do Gerenciador Firebird está disponível para download",
+            font=("Arial", 10),
+            foreground="gray"
+        ).pack(pady=5)
+        
+        # Informações da versão
+        info_frame = ttk.LabelFrame(main_frame, text="📋 Informações da Versão", padding=15)
+        info_frame.pack(fill="x", pady=10)
+        
+        ttk.Label(
+            info_frame,
+            text=f"Versão atual: {update_info['current_version']}",
+            font=("Arial", 10)
+        ).pack(anchor="w")
+        
+        ttk.Label(
+            info_frame,
+            text=f"Nova versão: {update_info['latest_version']}",
+            font=("Arial", 10, "bold")
+        ).pack(anchor="w", pady=5)
+        
+        # Notas de release
+        if update_info.get('release_notes'):
+            notes_frame = ttk.LabelFrame(main_frame, text="📝 Novidades desta versão", padding=15)
+            notes_frame.pack(fill="both", expand=True, pady=10)
+            
+            notes_text = scrolledtext.ScrolledText(notes_frame, height=6, wrap=tk.WORD)
+            notes_text.pack(fill="both", expand=True)
+            notes_text.insert("1.0", update_info['release_notes'])
+            notes_text.config(state="disabled")
+    
+        # Botões
+        btn_frame = ttk.Frame(main_frame)
+        btn_frame.pack(fill="x", pady=15)
+        
+        def download_update():
+            """Abre o link de download no navegador padrão"""
+            try:
+                import webbrowser
+                webbrowser.open(update_info['download_url'])
+                update_win.destroy()
+            except Exception as e:
+                messagebox.showerror("Erro", f"Não foi possível abrir o link de download:\n{e}")
+        
+        def remind_later():
+            """Fecha e lembra depois"""
+            self.conf["last_update_check"] = None
+            save_config(self.conf)
+            update_win.destroy()
+        
+        def skip_version():
+            # Marca esta versão como ignorada
+            self.conf["ignored_version"] = update_info['latest_version']
+            save_config(self.conf)
+            update_win.destroy()
+        
+        # Só mostra botão de download se houver URL
+        if update_info.get('download_url'):
+            ttk.Button(
+                btn_frame,
+                text="⬇️ Baixar Agora",
+                command=download_update,
+                cursor="hand2"
+            ).pack(side="left", padx=5)
+        
+        ttk.Button(
+            btn_frame,
+            text="⏰ Lembrar Depois",
+            command=remind_later,
+            cursor="hand2"
+        ).pack(side="left", padx=5)
+        
+        ttk.Button(
+            btn_frame,
+            text="🚫 Ignorar Esta Versão",
+            command=skip_version,
+            cursor="hand2"
+        ).pack(side="right", padx=5)
+        
+        # Foca na janela
+        update_win.focus_force()
+        
+        self.log(f"📢 Nova versão disponível: {update_info['latest_version']}", "info")
 
     # ---------- SISTEMA DE BANDEJA ----------
     def create_tray_icon(self):
