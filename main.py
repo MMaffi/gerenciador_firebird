@@ -1171,113 +1171,146 @@ class GerenciadorFirebirdApp(tk.Tk):
         tools_frame = ttk.Frame(self.notebook)
         self.notebook.add(tools_frame, text="Ferramentas")
         
-        # Frame de ferramentas
-        tools_grid = ttk.Frame(tools_frame, padding=20)
-        tools_grid.pack(fill="both", expand=True)
+        # Frame principal
+        main_frame = ttk.Frame(tools_frame)
+        main_frame.pack(fill="both", expand=True, padx=15, pady=15)
         
-        # Otimização
+        # ===== OPERAÇÕES DO BANCO DE DADOS =====
+        maintenance_frame = ttk.LabelFrame(main_frame, text="🔧 Operações do Banco de dados", padding=15)
+        maintenance_frame.pack(fill="x", pady=(0, 20))
+        
+        # Container para centralizar os botões
+        maintenance_container = ttk.Frame(maintenance_frame)
+        maintenance_container.pack(expand=True, fill="x")
+        
+        # Linha 1
+        row1_frame = ttk.Frame(maintenance_container)
+        row1_frame.pack(pady=10)
+        
         optimize_btn = ttk.Button(
-            tools_grid, 
+            row1_frame, 
             text="🔧 Otimizar Banco",
             cursor="hand2", 
             command=self.optimize_database,
-            width=20
+            width=30
         )
-        optimize_btn.grid(row=0, column=0, padx=10, pady=10, sticky="ew")
+        optimize_btn.pack(side="left", padx=8, pady=5)
         
-        # Correção de Banco
         repair_btn = ttk.Button(
-            tools_grid, 
+            row1_frame, 
             text="🔩 Corrigir Banco",
             cursor="hand2", 
             command=self.repair_database,
-            width=20
+            width=30
         )
-        repair_btn.grid(row=0, column=1, padx=10, pady=10, sticky="ew")
+        repair_btn.pack(side="left", padx=8, pady=5)
         
-        # LIMPEZA DE BANCO (SWEEP)
         sweep_btn = ttk.Button(
-            tools_grid, 
-            text="🧹 Limpar Banco",
+            row1_frame, 
+            text="🧹 Limpar Banco (Sweep)",
             cursor="hand2", 
             command=self.sweep_database,
-            width=20
+            width=30
         )
-        sweep_btn.grid(row=1, column=0, padx=10, pady=10, sticky="ew")
+        sweep_btn.pack(side="left", padx=8, pady=5)
         
-        # Migração
-        migrate_btn = ttk.Button(
-            tools_grid, 
-            text="🔄 Migrar Banco",
-            cursor="hand2", 
-            command=self.migrate_database,
-            width=20
-        )
-        migrate_btn.grid(row=1, column=1, padx=10, pady=10, sticky="ew")
+        # Linha 2
+        row2_frame = ttk.Frame(maintenance_container)
+        row2_frame.pack(pady=10)
         
-        # Recalcular Índices
         recalc_indexes_btn = ttk.Button(
-            tools_grid, 
+            row2_frame, 
             text="📊 Recalcular Índices",
             cursor="hand2", 
             command=self.recalculate_indexes,
-            width=20
+            width=30
         )
-        recalc_indexes_btn.grid(row=2, column=0, padx=10, pady=10, sticky="ew")
+        recalc_indexes_btn.pack(side="left", padx=8, pady=5)
 
-        # Verificar espaço
-        space_btn = ttk.Button(
-            tools_grid, 
-            text="💾 Verificar Espaço",
+        migrate_btn = ttk.Button(
+            row2_frame, 
+            text="🔄 Migrar Banco",
             cursor="hand2", 
-            command=self.check_disk_space,
-            width=20
+            command=self.migrate_database,
+            width=30
         )
-        space_btn.grid(row=2, column=1, padx=10, pady=10, sticky="ew") 
+        migrate_btn.pack(side="left", padx=8, pady=5)
         
-        # Relatório do Banco (gstat)
+        # ===== RELATÓRIOS =====
+        migration_frame = ttk.LabelFrame(main_frame, text="🔄 Relatórios", padding=15)
+        migration_frame.pack(fill="x", pady=(0, 20))
+        
+        # Container para centralizar os botões
+        migration_container = ttk.Frame(migration_frame)
+        migration_container.pack(expand=True, fill="x")
+        
+        # Linha 1
+        row_reports = ttk.Frame(migration_container)
+        row_reports.pack(pady=10)
+        
         gstat_report_btn = ttk.Button(
-            tools_grid, 
-            text="📈 Relatório Banco",
+            row_reports, 
+            text="📈 Relatório Banco (GSTAT)",
             cursor="hand2", 
             command=self.generate_gstat_report,
-            width=20
+            width=30
         )
-        gstat_report_btn.grid(row=3, column=0, padx=10, pady=10, sticky="ew")
+        gstat_report_btn.pack(side="left", padx=8, pady=5)
 
-        # Relatório do Sistema
         report_btn = ttk.Button(
-            tools_grid, 
+            row_reports, 
             text="📋 Relatório Sistema",
             cursor="hand2", 
             command=self.generate_system_report,
-            width=20
+            width=30
         )
-        report_btn.grid(row=3, column=1, padx=10, pady=10, sticky="ew")
+        report_btn.pack(side="left", padx=8, pady=5)
 
-        # Exportar configurações
+        space_btn = ttk.Button(
+            row_reports, 
+            text="💾 Verificar Espaço em Disco",
+            cursor="hand2", 
+            command=self.check_disk_space,
+            width=30
+        )
+        space_btn.pack(side="left", padx=8, pady=5)
+        
+        # ===== CONFIGURAÇÕES =====
+        config_frame = ttk.LabelFrame(main_frame, text="⚙️ Configurações e Utilitários", padding=15)
+        config_frame.pack(fill="x", pady=(0, 20))
+        
+        # Container para centralizar os botões
+        config_container = ttk.Frame(config_frame)
+        config_container.pack(expand=True, fill="x")
+        
+        # Linha 1
+        row_config = ttk.Frame(config_container)
+        row_config.pack(pady=10)
+        
         export_btn = ttk.Button(
-            tools_grid, 
-            text="📤 Exportar Config",
+            row_config, 
+            text="📤 Exportar Configurações",
             cursor="hand2", 
             command=self.export_config,
-            width=20
+            width=30
         )
-        export_btn.grid(row=4, column=0, padx=10, pady=10, sticky="ew")
-
-        # Importar configurações
+        export_btn.pack(side="left", padx=8, pady=5)
+        
         import_btn = ttk.Button(
-            tools_grid, 
-            text="📥 Importar Config",
+            row_config, 
+            text="📥 Importar Configurações",
             cursor="hand2", 
             command=self.import_config,
-            width=20
+            width=30
         )
-        import_btn.grid(row=4, column=1, padx=10, pady=10, sticky="ew")
-
-        # Configurar colunas
-        tools_grid.columnconfigure(0, weight=1)
-        tools_grid.columnconfigure(1, weight=1)
+        import_btn.pack(side="left", padx=8, pady=5)
+        
+        # Centralizar
+        for container in [maintenance_container, migration_container, config_container]:
+            container.pack_configure(anchor="center")
+        
+        main_frame.columnconfigure(0, weight=1)
+        main_frame.rowconfigure(0, weight=1)
 
     def _create_footer(self):
         """Cria rodapé da aplicação"""
