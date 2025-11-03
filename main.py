@@ -65,7 +65,7 @@ DEFAULT_KEEP_BACKUPS = 5
 REPORTS_DIR = BASE_DIR / "Relatórios"
 
 # Constantes para controle de versão
-APP_VERSION = "2025.11.01.0809"
+APP_VERSION = "2025.11.03.1019"
 VERSION_CHECK_URL = "https://raw.githubusercontent.com/MMaffi/gerenciador_firebird/main/version.json"
 
 # Opções disponíveis de pageSize
@@ -1171,113 +1171,146 @@ class GerenciadorFirebirdApp(tk.Tk):
         tools_frame = ttk.Frame(self.notebook)
         self.notebook.add(tools_frame, text="Ferramentas")
         
-        # Frame de ferramentas
-        tools_grid = ttk.Frame(tools_frame, padding=20)
-        tools_grid.pack(fill="both", expand=True)
+        # Frame principal
+        main_frame = ttk.Frame(tools_frame)
+        main_frame.pack(fill="both", expand=True, padx=15, pady=15)
         
-        # Otimização
+        # ===== OPERAÇÕES DO BANCO DE DADOS =====
+        maintenance_frame = ttk.LabelFrame(main_frame, text="🔧 Operações do Banco de dados", padding=15)
+        maintenance_frame.pack(fill="x", pady=(0, 20))
+        
+        # Container para centralizar os botões
+        maintenance_container = ttk.Frame(maintenance_frame)
+        maintenance_container.pack(expand=True, fill="x")
+        
+        # Linha 1
+        row1_frame = ttk.Frame(maintenance_container)
+        row1_frame.pack(pady=10)
+        
         optimize_btn = ttk.Button(
-            tools_grid, 
+            row1_frame, 
             text="🔧 Otimizar Banco",
             cursor="hand2", 
             command=self.optimize_database,
-            width=20
+            width=30
         )
-        optimize_btn.grid(row=0, column=0, padx=10, pady=10, sticky="ew")
+        optimize_btn.pack(side="left", padx=8, pady=5)
         
-        # Correção de Banco
         repair_btn = ttk.Button(
-            tools_grid, 
+            row1_frame, 
             text="🔩 Corrigir Banco",
             cursor="hand2", 
             command=self.repair_database,
-            width=20
+            width=30
         )
-        repair_btn.grid(row=0, column=1, padx=10, pady=10, sticky="ew")
+        repair_btn.pack(side="left", padx=8, pady=5)
         
-        # LIMPEZA DE BANCO (SWEEP)
         sweep_btn = ttk.Button(
-            tools_grid, 
-            text="🧹 Limpar Banco",
+            row1_frame, 
+            text="🧹 Limpar Banco (Sweep)",
             cursor="hand2", 
             command=self.sweep_database,
-            width=20
+            width=30
         )
-        sweep_btn.grid(row=1, column=0, padx=10, pady=10, sticky="ew")
+        sweep_btn.pack(side="left", padx=8, pady=5)
         
-        # Migração
-        migrate_btn = ttk.Button(
-            tools_grid, 
-            text="🔄 Migrar Banco",
-            cursor="hand2", 
-            command=self.migrate_database,
-            width=20
-        )
-        migrate_btn.grid(row=1, column=1, padx=10, pady=10, sticky="ew")
+        # Linha 2
+        row2_frame = ttk.Frame(maintenance_container)
+        row2_frame.pack(pady=10)
         
-        # Recalcular Índices
         recalc_indexes_btn = ttk.Button(
-            tools_grid, 
+            row2_frame, 
             text="📊 Recalcular Índices",
             cursor="hand2", 
             command=self.recalculate_indexes,
-            width=20
+            width=30
         )
-        recalc_indexes_btn.grid(row=2, column=0, padx=10, pady=10, sticky="ew")
+        recalc_indexes_btn.pack(side="left", padx=8, pady=5)
 
-        # Verificar espaço
-        space_btn = ttk.Button(
-            tools_grid, 
-            text="💾 Verificar Espaço",
+        migrate_btn = ttk.Button(
+            row2_frame, 
+            text="🔄 Migrar Banco",
             cursor="hand2", 
-            command=self.check_disk_space,
-            width=20
+            command=self.migrate_database,
+            width=30
         )
-        space_btn.grid(row=2, column=1, padx=10, pady=10, sticky="ew") 
+        migrate_btn.pack(side="left", padx=8, pady=5)
         
-        # Relatório do Banco (gstat)
+        # ===== RELATÓRIOS =====
+        migration_frame = ttk.LabelFrame(main_frame, text="🔄 Relatórios", padding=15)
+        migration_frame.pack(fill="x", pady=(0, 20))
+        
+        # Container para centralizar os botões
+        migration_container = ttk.Frame(migration_frame)
+        migration_container.pack(expand=True, fill="x")
+        
+        # Linha 1
+        row_reports = ttk.Frame(migration_container)
+        row_reports.pack(pady=10)
+        
         gstat_report_btn = ttk.Button(
-            tools_grid, 
-            text="📈 Relatório Banco",
+            row_reports, 
+            text="📈 Relatório Banco (GSTAT)",
             cursor="hand2", 
             command=self.generate_gstat_report,
-            width=20
+            width=30
         )
-        gstat_report_btn.grid(row=3, column=0, padx=10, pady=10, sticky="ew")
+        gstat_report_btn.pack(side="left", padx=8, pady=5)
 
-        # Relatório do Sistema
         report_btn = ttk.Button(
-            tools_grid, 
+            row_reports, 
             text="📋 Relatório Sistema",
             cursor="hand2", 
             command=self.generate_system_report,
-            width=20
+            width=30
         )
-        report_btn.grid(row=3, column=1, padx=10, pady=10, sticky="ew")
+        report_btn.pack(side="left", padx=8, pady=5)
 
-        # Exportar configurações
+        space_btn = ttk.Button(
+            row_reports, 
+            text="💾 Verificar Espaço em Disco",
+            cursor="hand2", 
+            command=self.check_disk_space,
+            width=30
+        )
+        space_btn.pack(side="left", padx=8, pady=5)
+        
+        # ===== CONFIGURAÇÕES =====
+        config_frame = ttk.LabelFrame(main_frame, text="⚙️ Configurações e Utilitários", padding=15)
+        config_frame.pack(fill="x", pady=(0, 20))
+        
+        # Container para centralizar os botões
+        config_container = ttk.Frame(config_frame)
+        config_container.pack(expand=True, fill="x")
+        
+        # Linha 1
+        row_config = ttk.Frame(config_container)
+        row_config.pack(pady=10)
+        
         export_btn = ttk.Button(
-            tools_grid, 
-            text="📤 Exportar Config",
+            row_config, 
+            text="📤 Exportar Configurações",
             cursor="hand2", 
             command=self.export_config,
-            width=20
+            width=30
         )
-        export_btn.grid(row=4, column=0, padx=10, pady=10, sticky="ew")
-
-        # Importar configurações
+        export_btn.pack(side="left", padx=8, pady=5)
+        
         import_btn = ttk.Button(
-            tools_grid, 
-            text="📥 Importar Config",
+            row_config, 
+            text="📥 Importar Configurações",
             cursor="hand2", 
             command=self.import_config,
-            width=20
+            width=30
         )
-        import_btn.grid(row=4, column=1, padx=10, pady=10, sticky="ew")
-
-        # Configurar colunas
-        tools_grid.columnconfigure(0, weight=1)
-        tools_grid.columnconfigure(1, weight=1)
+        import_btn.pack(side="left", padx=8, pady=5)
+        
+        # Centralizar
+        for container in [maintenance_container, migration_container, config_container]:
+            container.pack_configure(anchor="center")
+        
+        main_frame.columnconfigure(0, weight=1)
+        main_frame.rowconfigure(0, weight=1)
 
     def _create_footer(self):
         """Cria rodapé da aplicação"""
@@ -1335,13 +1368,8 @@ class GerenciadorFirebirdApp(tk.Tk):
             
             # Tópicos/Especificações da versão
             especificacoes = [
-                            "✓ Nova configuração da pasta do Firebird",
-                            "✓ Novo arquivo de função (isql.exe)",
-                            "✓ Correção de bugs na interface",
-                            "✓ Melhoria no desempenho geral",
-                            "✓ Novo botão para abrir pasta de backup padrão",
-                            "✓ Nova função de recálculo de índices",
-                            "✓ Sistema de verificação de atualizações automático"
+                            "✓ Nova organização de botões na aba ferramentas",
+                            "✓ Novas mensagens na função de migrar banco"
                         ]
             
             for especificacao in especificacoes:
@@ -3699,25 +3727,61 @@ class GerenciadorFirebirdApp(tk.Tk):
 
     def migrate_database(self):
         """Migra banco entre versões do Firebird"""
+        messagebox.showinfo(
+            "Migração de Banco de Dados",
+            "🔄 MIGRAÇÃO DE BANCO DE DADOS FIREBIRD\n\n"
+            "A migração entre versões do Firebird é feita através do processo de Backup & Restore.\n\n"
+            "📋 COMO FUNCIONA:\n"
+            "1. Um backup completo do banco atual é gerado\n"
+            "2. O backup é restaurado criando um novo banco\n"
+            "3. O novo banco estará na versão do Firebird configurado\n\n"
+            "⚙️ CONFIGURAÇÃO NECESSÁRIA:\n"
+            "• O Firebird selecionado nas configurações deve ser da versão DESEJADA\n"
+            "• Certifique-se de que o caminho do Firebird nas configurações aponta para a versão correta\n"
+            "• O processo preserva todos os dados e estrutura do banco\n\n"
+            "⚠️ IMPORTANTE:\n"
+            "• Faça um backup manual antes de migrar\n"
+            "• Teste o banco migrado em ambiente de desenvolvimento\n"
+            "• Consulte a documentação do Firebird para compatibilidade entre versões"
+        )
+        
+        if not messagebox.askyesno(
+            "Continuar com Migração",
+            "Deseja prosseguir com o processo de migração?\n\n"
+            "Será executado um backup completo seguido de restauração\n"
+            "usando o Firebird atualmente configurado nas configurações."
+        ):
+            return
+        
         gbak = self.conf.get("gbak_path") or find_executable("gbak.exe")
         if not gbak:
             messagebox.showerror("Erro", "gbak.exe não encontrado. Configure o caminho do Firebird nas configurações.")
             return
         
-        source_db = filedialog.askopenfilename(title="Selecione o banco para migrar")
+        source_db = filedialog.askopenfilename(
+            title="Selecione o banco para migrar",
+            filetypes=[("Firebird Database", "*.fdb"), ("Todos os arquivos", "*.*")]
+        )
         if not source_db:
             return
         
-        target_version = simpledialog.askstring("Migração", "Versão destino (2.5, 3.0, 4.0):")
-        if not target_version:
+        # Confirmação final
+        if not messagebox.askyesno(
+            "Confirmar Migração",
+            f"🚨 CONFIRMAÇÃO DE MIGRAÇÃO 🚨\n\n"
+            f"Banco selecionado: {Path(source_db).name}\n\n"
+            f"O banco será migrado para a versão do Firebird configurado nas configurações.\n"
+            f"Esta operação criará uma cópia do banco na nova versão.\n\n"
+            f"✅ Continuar com a migração?"
+        ):
             return
         
         backup_dir = Path(self.conf.get("backup_dir", DEFAULT_BACKUP_DIR))
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
         backup_file = backup_dir / f"migration_backup_{timestamp}.fbk"
-        migrated_file = backup_dir / f"migrated_v{target_version}_{Path(source_db).name}"
+        migrated_file = backup_dir / f"migrated_{Path(source_db).name}"
         
-        self.log(f"🔄 Iniciando migração para v{target_version}...", "info")
+        self.log(f"🔄 Iniciando processo de migração...", "info")
         self.log(f"🔌 Conectando em: {self._get_service_mgr_string()}", "info")
         
         # Backup
@@ -3745,8 +3809,16 @@ class GerenciadorFirebirdApp(tk.Tk):
             self.log(f"✅ Migração concluída: {migrated_file}", "success")
             try:
                 backup_file.unlink()
-            except:
-                pass
+                self.log("🗑️ Arquivo de backup temporário removido", "info")
+            except Exception as e:
+                self.log(f"⚠️ Não foi possível remover arquivo temporário: {e}", "warning")
+            
+            messagebox.showinfo(
+                "Migração Concluída",
+                f"✅ MIGRAÇÃO CONCLUÍDA COM SUCESSO!\n\n"
+                f"Banco migrado salvo como:\n{migrated_file}\n\n"
+                f"O banco está pronto para uso na nova versão."
+            )
         
         self.run_command(backup_cmd, after_backup)
 
