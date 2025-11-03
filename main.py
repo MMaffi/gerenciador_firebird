@@ -1897,6 +1897,11 @@ class GerenciadorFirebirdApp(tk.Tk):
                 self.dev_buffer = self.dev_buffer[:-1]
             else:
                 self.dev_buffer += event.char
+                
+            if self.dev_buffer.lower() == "cmd":
+                self.open_script_console()
+                self.dev_mode = False
+                self.dev_buffer = ""
 
     # ---------- EXECUÇÃO DE COMANDOS ----------
     def run_command(self, cmd, on_finish=None):
@@ -3197,14 +3202,76 @@ class GerenciadorFirebirdApp(tk.Tk):
 
     def _kill_by_pid(self):
         """Finaliza processo por PID específico"""
-        pid = simpledialog.askinteger("Finalizar por PID", "Digite o PID do processo:")
-        if pid is None:
-            return
-        
+        pid_dialog = tk.Toplevel(self)
+        pid_dialog.title("Finalizar por PID")
+        pid_dialog.geometry("300x170")
+        pid_dialog.resizable(False, False)
+        pid_dialog.transient(self)
+        pid_dialog.grab_set()
+
+        # Centraliza a janela
+        self.update_idletasks()
+        x = self.winfo_x() + (self.winfo_width() // 2) - 150
+        y = self.winfo_y() + (self.winfo_height() // 2) - 70
+        pid_dialog.geometry(f"+{x}+{y}")
+
+        # Configura o ícone
+        icon_path = BASE_DIR / "images" / "icon.ico"
+        if icon_path.exists():
+            pid_dialog.iconbitmap(str(icon_path))
+
+        # Frame principal
+        main_frame = ttk.Frame(pid_dialog, padding=20)
+        main_frame.pack(fill="both", expand=True)
+
+        # Label
+        ttk.Label(main_frame, text="Digite o PID do processo:",
+                font=("Arial", 10)).pack(pady=(0, 10))
+
+        # Entry para o PID
+        pid_var = tk.StringVar()
+        pid_entry = ttk.Entry(main_frame, textvariable=pid_var, width=15, font=("Arial", 12))
+        pid_entry.pack(pady=5)
+        pid_entry.focus()
+
+        # Frame para botões
+        btn_frame = ttk.Frame(main_frame)
+        btn_frame.pack(pady=15)
+
+        def confirm_pid():
+            """Confirma o PID digitado"""
+            pid_str = pid_var.get().strip()
+            if not pid_str:
+                messagebox.showwarning("Aviso", "Digite um PID válido.")
+                return
+
+            if not pid_str.isdigit():
+                messagebox.showwarning("Aviso", "O PID deve conter apenas números.")
+                pid_entry.focus()
+                return
+
+            pid = int(pid_str)
+            pid_dialog.destroy()
+            self._execute_kill_by_pid(pid)
+
+        def cancel_pid():
+            pid_dialog.destroy()
+
+        # Botões
+        ttk.Button(btn_frame, text="✅ Confirmar",
+                command=confirm_pid, cursor="hand2").pack(side="left", padx=5)
+        ttk.Button(btn_frame, text="❌ Cancelar",
+                command=cancel_pid, cursor="hand2").pack(side="left", padx=5)
+
+        # Enter confirma, ESC cancela
+        pid_entry.bind("<Return>", lambda e: confirm_pid())
+        pid_dialog.bind("<Escape>", lambda e: cancel_pid())
+
+    def _execute_kill_by_pid(self, pid):
         try:
             process = psutil.Process(pid)
             proc_name = process.name()
-            
+
             if not messagebox.askyesno(
                 "Confirmação",
                 f"Finalizar processo?\n\n"
@@ -3214,7 +3281,7 @@ class GerenciadorFirebirdApp(tk.Tk):
                 icon=messagebox.WARNING
             ):
                 return
-            
+
             try:
                 process.terminate()
                 process.wait(timeout=3)
@@ -3229,10 +3296,10 @@ class GerenciadorFirebirdApp(tk.Tk):
                 except Exception as e:
                     self.log(f"❌ Falha ao finalizar {proc_name} (PID: {pid}): {e}", "error")
                     messagebox.showerror("Erro", f"Falha ao finalizar processo {pid}:\n{e}")
-            
+
             # Atualiza lista
             self.after(1000, self._refresh_all_processes)
-            
+
         except psutil.NoSuchProcess:
             messagebox.showerror("Erro", f"Processo com PID {pid} não encontrado.")
         except Exception as e:
@@ -4477,69 +4544,30 @@ class GerenciadorFirebirdApp(tk.Tk):
 
     # ---------- CONSOLE DE DESENVOLVIMENTO ----------
     def open_script_console(self):
-        """Abre console de desenvolvimento"""
-        win = tk.Toplevel(self)
-        win.title("Console de Desenvolvimento")
-        win.geometry("700x500")
-        win.minsize(600, 400)
-
-        # Centraliza
-        self.update_idletasks()
-        x = self.winfo_x() + (self.winfo_width() // 2) - 350
-        y = self.winfo_y() + (self.winfo_height() // 2) - 250
-        win.geometry(f"+{x}+{y}")
-
-        # Ícone
-        icon_path = BASE_DIR / "images" / "icon.ico"
-        if icon_path.exists():
-            win.iconbitmap(str(icon_path))
-
-        win.transient(self)
-        win.grab_set()
-        win.focus_force()
-
-        ttk.Label(win, text="Console de Desenvolvimento - Execute código Python:").pack(pady=5)
-
-        text = scrolledtext.ScrolledText(win, height=15, width=80, font=("Consolas", 10))
-        text.pack(padx=10, pady=5, fill="both", expand=True)
-
-        output = scrolledtext.ScrolledText(win, height=8, width=80, font=("Consolas", 10), bg="#111", fg="#0f0")
-        output.pack(padx=10, pady=5, fill="both", expand=True)
-
-        def run_script(event=None):
-            code = text.get("1.0", tk.END).strip()
-            output.delete("1.0", tk.END)
-            if not code:
-                return
-            try:
-                local_vars = {
-                    'app': self,
-                    'config': self.conf,
-                    'Path': Path,
-                    'tk': tk,
-                    'ttk': ttk,
-                    'messagebox': messagebox,
-                    'filedialog': filedialog
-                }
-                exec(code, globals(), local_vars)
-                output.insert(tk.END, "✅ Execução concluída com sucesso.\n")
-            except Exception as e:
-                output.insert(tk.END, f"❌ Erro: {e}\n")
-
-        # Botão executar
-        ttk.Button(win, text="▶️ Executar Script", command=run_script, cursor="hand2").pack(pady=5)
-
-        # Atalho Shift + Enter
-        text.bind("<Shift-Return>", run_script)
-
-        self.log("🧩 Console de desenvolvimento aberto.", "info")
-
-        def on_close():
-            self.dev_mode = False
-            self.dev_buffer = ""
-            win.destroy()
-
-        win.protocol("WM_DELETE_WINDOW", on_close)
+        """Abre o CMD real do Windows em modo administrador"""
+        try:
+            if is_admin():
+                subprocess.Popen("cmd.exe", shell=True)
+                self.log("✅ CMD aberto (já em modo administrador)", "success")
+            else:
+                try:
+                    ctypes.windll.shell32.ShellExecuteW(
+                        None, 
+                        "runas",
+                        "cmd.exe", 
+                        None, 
+                        None, 
+                        1 
+                    )
+                    self.log("✅ Solicitando CMD em modo administrador...", "success")
+                except Exception as e:
+                    self.log(f"❌ Falha ao abrir CMD como admin: {e}", "error")
+                    subprocess.Popen("cmd.exe", shell=True)
+                    self.log("✅ CMD aberto em modo normal", "info")
+                    
+        except Exception as e:
+            self.log(f"❌ Erro ao abrir CMD: {e}", "error")
+            messagebox.showerror("Erro", f"Não foi possível abrir o CMD:\n{e}")
 
     def __del__(self):
         """Destrutor - para o agendador"""
