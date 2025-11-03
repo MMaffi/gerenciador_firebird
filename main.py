@@ -3732,25 +3732,61 @@ class GerenciadorFirebirdApp(tk.Tk):
 
     def migrate_database(self):
         """Migra banco entre versões do Firebird"""
+        messagebox.showinfo(
+            "Migração de Banco de Dados",
+            "🔄 MIGRAÇÃO DE BANCO DE DADOS FIREBIRD\n\n"
+            "A migração entre versões do Firebird é feita através do processo de Backup & Restore.\n\n"
+            "📋 COMO FUNCIONA:\n"
+            "1. Um backup completo do banco atual é gerado\n"
+            "2. O backup é restaurado criando um novo banco\n"
+            "3. O novo banco estará na versão do Firebird configurado\n\n"
+            "⚙️ CONFIGURAÇÃO NECESSÁRIA:\n"
+            "• O Firebird selecionado nas configurações deve ser da versão DESEJADA\n"
+            "• Certifique-se de que o caminho do Firebird nas configurações aponta para a versão correta\n"
+            "• O processo preserva todos os dados e estrutura do banco\n\n"
+            "⚠️ IMPORTANTE:\n"
+            "• Faça um backup manual antes de migrar\n"
+            "• Teste o banco migrado em ambiente de desenvolvimento\n"
+            "• Consulte a documentação do Firebird para compatibilidade entre versões"
+        )
+        
+        if not messagebox.askyesno(
+            "Continuar com Migração",
+            "Deseja prosseguir com o processo de migração?\n\n"
+            "Será executado um backup completo seguido de restauração\n"
+            "usando o Firebird atualmente configurado nas configurações."
+        ):
+            return
+        
         gbak = self.conf.get("gbak_path") or find_executable("gbak.exe")
         if not gbak:
             messagebox.showerror("Erro", "gbak.exe não encontrado. Configure o caminho do Firebird nas configurações.")
             return
         
-        source_db = filedialog.askopenfilename(title="Selecione o banco para migrar")
+        source_db = filedialog.askopenfilename(
+            title="Selecione o banco para migrar",
+            filetypes=[("Firebird Database", "*.fdb"), ("Todos os arquivos", "*.*")]
+        )
         if not source_db:
             return
         
-        target_version = simpledialog.askstring("Migração", "Versão destino (2.5, 3.0, 4.0):")
-        if not target_version:
+        # Confirmação final
+        if not messagebox.askyesno(
+            "Confirmar Migração",
+            f"🚨 CONFIRMAÇÃO DE MIGRAÇÃO 🚨\n\n"
+            f"Banco selecionado: {Path(source_db).name}\n\n"
+            f"O banco será migrado para a versão do Firebird configurado nas configurações.\n"
+            f"Esta operação criará uma cópia do banco na nova versão.\n\n"
+            f"✅ Continuar com a migração?"
+        ):
             return
         
         backup_dir = Path(self.conf.get("backup_dir", DEFAULT_BACKUP_DIR))
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
         backup_file = backup_dir / f"migration_backup_{timestamp}.fbk"
-        migrated_file = backup_dir / f"migrated_v{target_version}_{Path(source_db).name}"
+        migrated_file = backup_dir / f"migrated_{Path(source_db).name}"
         
-        self.log(f"🔄 Iniciando migração para v{target_version}...", "info")
+        self.log(f"🔄 Iniciando processo de migração...", "info")
         self.log(f"🔌 Conectando em: {self._get_service_mgr_string()}", "info")
         
         # Backup
@@ -3778,8 +3814,16 @@ class GerenciadorFirebirdApp(tk.Tk):
             self.log(f"✅ Migração concluída: {migrated_file}", "success")
             try:
                 backup_file.unlink()
-            except:
-                pass
+                self.log("🗑️ Arquivo de backup temporário removido", "info")
+            except Exception as e:
+                self.log(f"⚠️ Não foi possível remover arquivo temporário: {e}", "warning")
+            
+            messagebox.showinfo(
+                "Migração Concluída",
+                f"✅ MIGRAÇÃO CONCLUÍDA COM SUCESSO!\n\n"
+                f"Banco migrado salvo como:\n{migrated_file}\n\n"
+                f"O banco está pronto para uso na nova versão."
+            )
         
         self.run_command(backup_cmd, after_backup)
 
