@@ -1897,11 +1897,6 @@ class GerenciadorFirebirdApp(tk.Tk):
                 self.dev_buffer = self.dev_buffer[:-1]
             else:
                 self.dev_buffer += event.char
-                
-            if self.dev_buffer.lower() == "cmd":
-                self.open_script_console()
-                self.dev_mode = False
-                self.dev_buffer = ""
 
     # ---------- EXECUÇÃO DE COMANDOS ----------
     def run_command(self, cmd, on_finish=None):
@@ -4544,30 +4539,273 @@ class GerenciadorFirebirdApp(tk.Tk):
 
     # ---------- CONSOLE DE DESENVOLVIMENTO ----------
     def open_script_console(self):
-        """Abre o CMD real do Windows em modo administrador"""
-        try:
-            if is_admin():
-                subprocess.Popen("cmd.exe", shell=True)
-                self.log("✅ CMD aberto (já em modo administrador)", "success")
-            else:
+        """Abre console de desenvolvimento para comandos CMD"""
+        win = tk.Toplevel(self)
+        win.title("Console de Desenvolvimento - Terminal CMD")
+        win.geometry("800x600")
+        win.minsize(700, 500)
+
+        # Centraliza
+        self.update_idletasks()
+        x = self.winfo_x() + (self.winfo_width() // 2) - 400
+        y = self.winfo_y() + (self.winfo_height() // 2) - 300
+        win.geometry(f"+{x}+{y}")
+
+        # Ícone
+        icon_path = BASE_DIR / "images" / "icon.ico"
+        if icon_path.exists():
+            win.iconbitmap(str(icon_path))
+
+        win.transient(self)
+        win.grab_set()
+        win.focus_force()
+
+        # Frame principal
+        main_frame = ttk.Frame(win)
+        main_frame.pack(fill="both", expand=True, padx=10, pady=10)
+
+        # Título
+        ttk.Label(main_frame, 
+                text="💻 Console de Desenvolvimento - Terminal CMD",
+                font=("Arial", 11, "bold")).pack(pady=(0, 10))
+
+        # Área de saída do terminal
+        output_frame = ttk.LabelFrame(main_frame, text="Terminal", padding=10)
+        output_frame.pack(fill="both", expand=True)
+
+        output_text = scrolledtext.ScrolledText(output_frame, 
+                                            font=("Consolas", 10), 
+                                            bg="#0C0C0C", 
+                                            fg="#CCCCCC",
+                                            insertbackground="#FFFFFF",
+                                            wrap=tk.WORD)
+        output_text.pack(fill="both", expand=True)
+
+        # Frame de entrada
+        input_frame = ttk.Frame(main_frame)
+        input_frame.pack(fill="x", pady=(10, 0))
+
+        # Prompt com diretório atual
+        current_dir = os.getcwd()
+        prompt_label = ttk.Label(input_frame, text=f"{current_dir}>", font=("Consolas", 10, "bold"))
+        prompt_label.pack(side="left")
+
+        # Campo de entrada do comando
+        cmd_var = tk.StringVar()
+        cmd_entry = ttk.Entry(input_frame, textvariable=cmd_var, font=("Consolas", 10), width=80)
+        cmd_entry.pack(side="left", fill="x", expand=True, padx=(5, 0))
+        
+        # Frame de botões
+        btn_frame = ttk.Frame(main_frame)
+        btn_frame.pack(fill="x", pady=10)
+
+        # Variáveis para controle
+        current_process = None
+        command_history = []
+        history_index = -1
+        current_directory = current_dir
+
+        def update_prompt():
+            nonlocal current_directory
+            prompt_label.config(text=f"{current_directory}>")
+
+        def execute_command(command=None):
+            nonlocal current_process, current_directory, command_history, history_index
+            
+            if command is None:
+                command = cmd_var.get().strip()
+            
+            if not command:
+                return
+
+            # Adiciona ao histórico
+            if not command_history or command_history[-1] != command:
+                command_history.append(command)
+            history_index = len(command_history)
+            
+            output_text.insert(tk.END, f"{current_directory}>{command}\n")
+            output_text.see(tk.END)
+            
+            cmd_var.set("")
+            
+            # Comandos especiais
+            if command.lower() in ['cls', 'clear']:
+                output_text.delete("1.0", tk.END)
+                return
+            
+            elif command.lower().startswith('cd '):
                 try:
-                    ctypes.windll.shell32.ShellExecuteW(
-                        None, 
-                        "runas",
-                        "cmd.exe", 
-                        None, 
-                        None, 
-                        1 
-                    )
-                    self.log("✅ Solicitando CMD em modo administrador...", "success")
-                except Exception as e:
-                    self.log(f"❌ Falha ao abrir CMD como admin: {e}", "error")
-                    subprocess.Popen("cmd.exe", shell=True)
-                    self.log("✅ CMD aberto em modo normal", "info")
+                    new_dir = command[3:].strip()
+                    new_dir = new_dir.strip('"\'')
                     
-        except Exception as e:
-            self.log(f"❌ Erro ao abrir CMD: {e}", "error")
-            messagebox.showerror("Erro", f"Não foi possível abrir o CMD:\n{e}")
+                    if not new_dir:
+                        new_dir = os.path.expanduser("~")
+                    elif new_dir == "..":
+                        new_dir = os.path.dirname(current_directory)
+                    elif new_dir == "-":
+                        new_dir = os.path.dirname(current_directory)
+                    elif not os.path.isabs(new_dir):
+                        new_dir = os.path.join(current_directory, new_dir)
+                    
+                    new_dir = os.path.abspath(new_dir)
+                    
+                    if os.path.exists(new_dir) and os.path.isdir(new_dir):
+                        os.chdir(new_dir)
+                        current_directory = new_dir
+                        update_prompt()
+                        output_text.insert(tk.END, f"Diretório alterado para: {current_directory}\n")
+                    else:
+                        output_text.insert(tk.END, f"O sistema não pode encontrar o caminho especificado: {new_dir}\n")
+                    
+                    output_text.see(tk.END)
+                    return
+                    
+                except Exception as e:
+                    output_text.insert(tk.END, f"Erro ao mudar diretório: {e}\n")
+                    output_text.see(tk.END)
+                    return
+
+            def run_cmd():
+                nonlocal current_process, current_directory
+                try:
+                    current_process = subprocess.Popen(
+                        command,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.STDOUT,
+                        stdin=subprocess.PIPE,
+                        text=True,
+                        encoding='utf-8',
+                        errors='replace',
+                        shell=True,
+                        bufsize=1,
+                        universal_newlines=True,
+                        cwd=current_directory
+                    )
+
+                    for line in iter(current_process.stdout.readline, ''):
+                        if line.strip():
+                            win.after(0, lambda l=line: output_text.insert(tk.END, l))
+                            win.after(0, lambda: output_text.see(tk.END))
+
+                    current_process.stdout.close()
+                    return_code = current_process.wait()
+
+                    win.after(0, lambda: output_text.insert(tk.END, f"\n"))
+                    if return_code != 0:
+                        win.after(0, lambda: output_text.insert(tk.END, f"Processo finalizado com código: {return_code}\n"))
+                    
+                    win.after(0, lambda: output_text.see(tk.END))
+                    current_process = None
+
+                except Exception as e:
+                    win.after(0, lambda: output_text.insert(tk.END, f"Erro ao executar comando: {e}\n"))
+                    win.after(0, lambda: output_text.see(tk.END))
+                    current_process = None
+
+            # Executa em thread separada
+            threading.Thread(target=run_cmd, daemon=True).start()
+
+        def stop_command():
+            nonlocal current_process
+            if current_process and current_process.poll() is None:
+                try:
+                    current_process.terminate()
+                    output_text.insert(tk.END, "\nComando interrompido pelo usuário.\n")
+                    output_text.see(tk.END)
+                    current_process = None
+                except Exception as e:
+                    output_text.insert(tk.END, f"Erro ao parar comando: {e}\n")
+                    output_text.see(tk.END)
+
+        def clear_terminal():
+            output_text.delete("1.0", tk.END)
+
+        def navigate_history(direction):
+            nonlocal history_index, command_history
+            
+            if not command_history:
+                return
+                
+            if direction == "up" and history_index > 0:
+                history_index -= 1
+            elif direction == "down" and history_index < len(command_history) - 1:
+                history_index += 1
+            elif direction == "down" and history_index == len(command_history) - 1:
+                history_index = len(command_history)
+                cmd_var.set("")
+                return
+                
+            if 0 <= history_index < len(command_history):
+                cmd_var.set(command_history[history_index])
+                cmd_entry.icursor(tk.END)
+
+        # Botões principais
+        ttk.Button(btn_frame, 
+                text="▶️ Executar", 
+                command=lambda: execute_command(),
+                cursor="hand2").pack(side="left", padx=5)
+
+        ttk.Button(btn_frame, 
+                text="🛑 Parar", 
+                command=stop_command,
+                cursor="hand2").pack(side="left", padx=5)
+
+        ttk.Button(btn_frame, 
+                text="🗑️ Limpar", 
+                command=clear_terminal,
+                cursor="hand2").pack(side="left", padx=5)
+
+        ttk.Button(btn_frame, 
+                text="📂 Diretório Atual", 
+                command=lambda: output_text.insert(tk.END, f"Diretório atual: {current_directory}\n"),
+                cursor="hand2").pack(side="left", padx=5)
+
+        # Bindings de teclado
+        def on_key_press(event):
+            if event.keysym == 'Return':
+                execute_command()
+            elif event.keysym == 'Escape':
+                stop_command()
+            elif event.keysym == 'Up':
+                navigate_history("up")
+                return "break" 
+            elif event.keysym == 'Down':
+                navigate_history("down")
+                return "break" 
+            elif event.state & 0x4 and event.keysym == 'l':
+                clear_terminal()
+                return "break"
+
+        cmd_entry.bind('<Return>', on_key_press)
+        cmd_entry.bind('<Escape>', on_key_press)
+        cmd_entry.bind('<Up>', on_key_press)
+        cmd_entry.bind('<Down>', on_key_press)
+        cmd_entry.bind('<Control-l>', on_key_press)
+        win.bind('<Escape>', on_key_press)
+
+        # Mensagem
+        output_text.insert(tk.END, f"Terminal CMD - Diretório atual: {current_directory}\n")
+        output_text.insert(tk.END, "Digite 'help' para ajuda.\n")
+        output_text.insert(tk.END, "Use ↑↓ para navegar no histórico de comandos.\n")
+        output_text.insert(tk.END, "-" * 60 + "\n\n")
+
+        cmd_entry.focus()
+
+        self.log("💻 Terminal CMD de desenvolvimento aberto.", "info")
+
+        def on_close():
+            nonlocal current_process
+            if current_process and current_process.poll() is None:
+                if messagebox.askyesno("Confirmar", "Há um comando em execução. Deseja realmente fechar?"):
+                    try:
+                        current_process.terminate()
+                    except:
+                        pass
+            self.dev_mode = False
+            self.dev_buffer = ""
+            win.destroy()
+
+        win.protocol("WM_DELETE_WINDOW", on_close)
 
     def __del__(self):
         """Destrutor - para o agendador"""
