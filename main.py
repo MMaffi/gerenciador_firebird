@@ -1897,6 +1897,12 @@ class GerenciadorFirebirdApp(tk.Tk):
                 self.dev_buffer = self.dev_buffer[:-1]
             else:
                 self.dev_buffer += event.char
+                
+            # Verifica se digitou "SQL"
+            if self.dev_buffer.upper().endswith("SQL"):
+                self.open_sql_console()
+                self.dev_mode = False
+                self.dev_buffer = ""
 
     # ---------- EXECUÇÃO DE COMANDOS ----------
     def run_command(self, cmd, on_finish=None):
@@ -4537,18 +4543,28 @@ class GerenciadorFirebirdApp(tk.Tk):
         if path:
             var.set(path)
 
-    # ---------- CONSOLE DE DESENVOLVIMENTO ----------
-    def open_script_console(self):
-        """Abre console de desenvolvimento para comandos CMD"""
+    # ---------- EDITOR DE SQL ----------
+    def open_sql_console(self):
+        """Abre console SQL para executar consultas no banco de dados"""
+        db_path = filedialog.askopenfilename(
+            title="Selecione o banco de dados para conectar",
+            filetypes=[("Firebird Database", "*.fdb"), ("Todos os arquivos", "*.*")]
+        )
+        
+        if not db_path:
+            return
+        
+        db_name = Path(db_path).name
+        
         win = tk.Toplevel(self)
-        win.title("Console de Desenvolvimento - Terminal CMD")
-        win.geometry("800x600")
-        win.minsize(700, 500)
+        win.title(f"Editor SQL - {db_name}")
+        win.geometry("1200x800")
+        win.minsize(1000, 600)
 
         # Centraliza
         self.update_idletasks()
-        x = self.winfo_x() + (self.winfo_width() // 2) - 400
-        y = self.winfo_y() + (self.winfo_height() // 2) - 300
+        x = self.winfo_x() + (self.winfo_width() // 2) - 600
+        y = self.winfo_y() + (self.winfo_height() // 2) - 400
         win.geometry(f"+{x}+{y}")
 
         # Ícone
@@ -4564,243 +4580,542 @@ class GerenciadorFirebirdApp(tk.Tk):
         main_frame = ttk.Frame(win)
         main_frame.pack(fill="both", expand=True, padx=10, pady=10)
 
-        # Título
-        ttk.Label(main_frame, 
-                text="💻 Console de Desenvolvimento - Terminal CMD",
-                font=("Arial", 11, "bold")).pack(pady=(0, 10))
+        # Cabeçalho com informações do banco
+        header_frame = ttk.Frame(main_frame)
+        header_frame.pack(fill="x", pady=(0, 10))
 
-        # Área de saída do terminal
-        output_frame = ttk.LabelFrame(main_frame, text="Terminal", padding=10)
-        output_frame.pack(fill="both", expand=True)
+        ttk.Label(header_frame, 
+                text=f"🔍 Editor SQL - Conectado a: {db_name}",
+                font=("Arial", 11, "bold")).pack(anchor="w")
 
-        output_text = scrolledtext.ScrolledText(output_frame, 
-                                            font=("Consolas", 10), 
-                                            bg="#0C0C0C", 
-                                            fg="#CCCCCC",
-                                            insertbackground="#FFFFFF",
-                                            wrap=tk.WORD)
-        output_text.pack(fill="both", expand=True)
+        ttk.Label(header_frame, 
+                text=f"📍 {db_path}",
+                font=("Arial", 9),
+                foreground="gray").pack(anchor="w")
 
-        # Frame de entrada
-        input_frame = ttk.Frame(main_frame)
-        input_frame.pack(fill="x", pady=(10, 0))
+        # Frame do editor SQL
+        editor_frame = ttk.LabelFrame(main_frame, text="Editor SQL", padding=10)
+        editor_frame.pack(fill="both", expand=True, pady=(0, 10))
 
-        # Prompt com diretório atual
-        current_dir = os.getcwd()
-        prompt_label = ttk.Label(input_frame, text=f"{current_dir}>", font=("Consolas", 10, "bold"))
-        prompt_label.pack(side="left")
+        # Área de edição SQL
+        sql_text = scrolledtext.ScrolledText(
+            editor_frame, 
+            font=("Consolas", 10),
+            wrap=tk.WORD,
+            height=12
+        )
+        sql_text.pack(fill="both", expand=True)
 
-        # Campo de entrada do comando
-        cmd_var = tk.StringVar()
-        cmd_entry = ttk.Entry(input_frame, textvariable=cmd_var, font=("Consolas", 10), width=80)
-        cmd_entry.pack(side="left", fill="x", expand=True, padx=(5, 0))
+        # Inserir template básico
+        template = """-- Digite suas consultas SQL aqui
+    -- Use Ctrl+Enter para executar a consulta selecionada
+    -- Use F5 para executar toda a consulta
+
+    -- Exemplo: Selecionar todas as tabelas
+    SELECT 
+        RDB$RELATION_NAME as tabela,
+        RDB$OWNER_NAME as proprietario
+    FROM RDB$RELATIONS 
+    WHERE RDB$SYSTEM_FLAG = 0 
+    ORDER BY RDB$RELATION_NAME;
+
+    -- Exemplo: Contar registros em uma tabela
+    -- SELECT COUNT(*) as total_registros FROM NOME_DA_TABELA;
+
+    """
+        sql_text.insert("1.0", template)
+
+        # Frame de resultados
+        results_frame = ttk.LabelFrame(main_frame, text="Resultados", padding=10)
+        results_frame.pack(fill="both", expand=True, pady=(0, 10))
+
+        # Container para treeview e scrollbars
+        tree_container = ttk.Frame(results_frame)
+        tree_container.pack(fill="both", expand=True)
+
+        # Treeview para mostrar resultados em tabela
+        results_tree = ttk.Treeview(tree_container, show="headings")
         
+        # Scrollbars para o treeview
+        v_scrollbar = ttk.Scrollbar(tree_container, orient="vertical", command=results_tree.yview)
+        h_scrollbar = ttk.Scrollbar(tree_container, orient="horizontal", command=results_tree.xview)
+        results_tree.configure(yscrollcommand=v_scrollbar.set, xscrollcommand=h_scrollbar.set)
+        
+        # Layout usando grid para melhor controle
+        results_tree.grid(row=0, column=0, sticky="nsew")
+        v_scrollbar.grid(row=0, column=1, sticky="ns")
+        h_scrollbar.grid(row=1, column=0, sticky="ew")
+        
+        tree_container.grid_rowconfigure(0, weight=1)
+        tree_container.grid_columnconfigure(0, weight=1)
+
+        # Frame de status
+        status_frame = ttk.Frame(main_frame)
+        status_frame.pack(fill="x", pady=(0, 10))
+
+        sql_status = ttk.Label(status_frame, text="Pronto para executar consultas...", foreground="gray")
+        sql_status.pack(side="left")
+
         # Frame de botões
         btn_frame = ttk.Frame(main_frame)
-        btn_frame.pack(fill="x", pady=10)
+        btn_frame.pack(fill="x")
 
-        # Variáveis para controle
-        current_process = None
-        command_history = []
-        history_index = -1
-        current_directory = current_dir
+        def execute_query_with_fbclient():
+            try:
+                import fdb
+            except ImportError:
+                messagebox.showerror("Erro", "Biblioteca fdb não encontrada. Instale com: pip install fdb")
+                return None, None
+            
+            sql_code = sql_text.get("1.0", tk.END).strip()
+            
+            # Verifica se há texto selecionado
+            try:
+                selected_text = sql_text.get(tk.SEL_FIRST, tk.SEL_LAST).strip()
+                if selected_text:
+                    sql_code = selected_text
+            except:
+                pass
+            
+            if not sql_code:
+                return None, None
+            
+            try:
+                # Conecta ao banco usando fdb
+                conn = fdb.connect(
+                    host=self.conf.get('firebird_host', 'localhost'),
+                    database=db_path,
+                    user=self.conf.get("firebird_user", "SYSDBA"),
+                    password=self.conf.get("firebird_password", "masterkey"),
+                    port=int(self.conf.get("firebird_port", "26350"))
+                )
+                
+                cursor = conn.cursor()
+                cursor.execute(sql_code)
+                
+                # Obtém os nomes das colunas
+                columns = [desc[0] for desc in cursor.description]
+                
+                # Obtém todos os resultados
+                results = cursor.fetchall()
+                
+                cursor.close()
+                conn.close()
+                
+                return columns, results
+                
+            except Exception as e:
+                return None, f"Erro na consulta: {str(e)}"
 
-        def update_prompt():
-            nonlocal current_directory
-            prompt_label.config(text=f"{current_directory}>")
+        def calculate_optimal_column_widths(columns, data):
+            """Calcula larguras baseadas no maior conteúdo de cada coluna"""
+            widths = {}
+            
+            for i, col in enumerate(columns):
+                # Largura baseada no cabeçalho
+                header_width = len(str(col)) * 9 + 25
+                
+                # Largura baseada nos dados - encontra o maior conteúdo
+                max_data_width = 0
+                for row in data:
+                    if i < len(row):
+                        cell_content = str(row[i]) if row[i] is not None else ""
+                        cell_width = len(cell_content) * 7 + 20
+                        if cell_width > max_data_width:
+                            max_data_width = cell_width
+                
+                optimal_width = max(header_width, max_data_width, 100)
+                
+                widths[col] = min(optimal_width, 800)
+            
+            return widths
 
-        def execute_command(command=None):
-            nonlocal current_process, current_directory, command_history, history_index
+        def setup_columns(columns, data):
+            """Configura as colunas do treeview com larguras ótimas"""
+            results_tree["columns"] = columns
             
-            if command is None:
-                command = cmd_var.get().strip()
+            optimal_widths = calculate_optimal_column_widths(columns, data)
             
-            if not command:
-                return
+            for col in columns:
+                results_tree.heading(col, text=col)
+                results_tree.column(col, width=optimal_widths[col], anchor="w", minwidth=80, stretch=False)
+            
+            for row in data:
+                results_tree.insert("", "end", values=row)
 
-            # Adiciona ao histórico
-            if not command_history or command_history[-1] != command:
-                command_history.append(command)
-            history_index = len(command_history)
+        def execute_query():
+            """Executa a consulta SQL"""
+            sql_status.config(text="🔄 Executando consulta...", foreground="blue")
+            win.update()
             
-            output_text.insert(tk.END, f"{current_directory}>{command}\n")
-            output_text.see(tk.END)
-            
-            cmd_var.set("")
-            
-            # Comandos especiais
-            if command.lower() in ['cls', 'clear']:
-                output_text.delete("1.0", tk.END)
-                return
-            
-            elif command.lower().startswith('cd '):
-                try:
-                    new_dir = command[3:].strip()
-                    new_dir = new_dir.strip('"\'')
+            def run_query():
+                # Primeiro tenta com fdb
+                columns, results = execute_query_with_fbclient()
+                
+                def update_ui():
+                    # Limpa resultados anteriores
+                    for item in results_tree.get_children():
+                        results_tree.delete(item)
                     
-                    if not new_dir:
-                        new_dir = os.path.expanduser("~")
-                    elif new_dir == "..":
-                        new_dir = os.path.dirname(current_directory)
-                    elif new_dir == "-":
-                        new_dir = os.path.dirname(current_directory)
-                    elif not os.path.isabs(new_dir):
-                        new_dir = os.path.join(current_directory, new_dir)
+                    # Limpa colunas existentes
+                    results_tree["columns"] = []
                     
-                    new_dir = os.path.abspath(new_dir)
-                    
-                    if os.path.exists(new_dir) and os.path.isdir(new_dir):
-                        os.chdir(new_dir)
-                        current_directory = new_dir
-                        update_prompt()
-                        output_text.insert(tk.END, f"Diretório alterado para: {current_directory}\n")
+                    if columns is not None and results is not None:
+                        if isinstance(results, list):
+                            # Sucesso
+                            _show_tabular_results(columns, results)
+                        else:
+                            # Erro
+                            _show_error_output(results)
                     else:
-                        output_text.insert(tk.END, f"O sistema não pode encontrar o caminho especificado: {new_dir}\n")
-                    
-                    output_text.see(tk.END)
-                    return
-                    
-                except Exception as e:
-                    output_text.insert(tk.END, f"Erro ao mudar diretório: {e}\n")
-                    output_text.see(tk.END)
-                    return
-
-            def run_cmd():
-                nonlocal current_process, current_directory
-                try:
-                    current_process = subprocess.Popen(
-                        command,
-                        stdout=subprocess.PIPE,
-                        stderr=subprocess.STDOUT,
-                        stdin=subprocess.PIPE,
-                        text=True,
-                        encoding='utf-8',
-                        errors='replace',
-                        shell=True,
-                        bufsize=1,
-                        universal_newlines=True,
-                        cwd=current_directory
-                    )
-
-                    for line in iter(current_process.stdout.readline, ''):
-                        if line.strip():
-                            win.after(0, lambda l=line: output_text.insert(tk.END, l))
-                            win.after(0, lambda: output_text.see(tk.END))
-
-                    current_process.stdout.close()
-                    return_code = current_process.wait()
-
-                    win.after(0, lambda: output_text.insert(tk.END, f"\n"))
-                    if return_code != 0:
-                        win.after(0, lambda: output_text.insert(tk.END, f"Processo finalizado com código: {return_code}\n"))
-                    
-                    win.after(0, lambda: output_text.see(tk.END))
-                    current_process = None
-
-                except Exception as e:
-                    win.after(0, lambda: output_text.insert(tk.END, f"Erro ao executar comando: {e}\n"))
-                    win.after(0, lambda: output_text.see(tk.END))
-                    current_process = None
-
-            # Executa em thread separada
-            threading.Thread(target=run_cmd, daemon=True).start()
-
-        def stop_command():
-            nonlocal current_process
-            if current_process and current_process.poll() is None:
-                try:
-                    current_process.terminate()
-                    output_text.insert(tk.END, "\nComando interrompido pelo usuário.\n")
-                    output_text.see(tk.END)
-                    current_process = None
-                except Exception as e:
-                    output_text.insert(tk.END, f"Erro ao parar comando: {e}\n")
-                    output_text.see(tk.END)
-
-        def clear_terminal():
-            output_text.delete("1.0", tk.END)
-
-        def navigate_history(direction):
-            nonlocal history_index, command_history
+                        _execute_with_isql()
+                
+                self.after(0, update_ui)
             
-            if not command_history:
-                return
+            # Executa em thread separada
+            threading.Thread(target=run_query, daemon=True).start()
+
+        def _execute_with_isql():
+            """Executa com ISQL como fallback"""
+            try:
+                sql_code = sql_text.get("1.0", tk.END).strip()
                 
-            if direction == "up" and history_index > 0:
-                history_index -= 1
-            elif direction == "down" and history_index < len(command_history) - 1:
-                history_index += 1
-            elif direction == "down" and history_index == len(command_history) - 1:
-                history_index = len(command_history)
-                cmd_var.set("")
-                return
+                # Verifica se há texto selecionado
+                try:
+                    selected_text = sql_text.get(tk.SEL_FIRST, tk.SEL_LAST).strip()
+                    if selected_text:
+                        sql_code = selected_text
+                except:
+                    pass
                 
-            if 0 <= history_index < len(command_history):
-                cmd_var.set(command_history[history_index])
-                cmd_entry.icursor(tk.END)
+                isql = self.conf.get("isql_path") or find_executable("isql.exe")
+                if not isql:
+                    _show_error_output("isql.exe não encontrado.")
+                    return
+                
+                # Cria arquivo temporário com o SQL
+                temp_dir = Path(tempfile.gettempdir())
+                temp_sql_file = temp_dir / f"temp_query_{datetime.now().strftime('%Y%m%d_%H%M%S')}.sql"
+                
+                # Escreve o SQL no arquivo temporário
+                with open(temp_sql_file, 'w', encoding='utf-8') as f:
+                    f.write("SET HEADING ON;\n")
+                    f.write("SET STATS OFF;\n")
+                    f.write(sql_code)
+                    if not sql_code.strip().endswith(';'):
+                        f.write(";")
+                
+                # Comando ISQL
+                connection_string = f"{self.conf.get('firebird_host', 'localhost')}/{self.conf.get('firebird_port', '26350')}:{db_path}"
+                
+                cmd = [
+                    isql,
+                    connection_string,
+                    "-user", self.conf.get("firebird_user", "SYSDBA"),
+                    "-pass", self.conf.get("firebird_password", "masterkey"),
+                    "-i", str(temp_sql_file)
+                ]
+                
+                CREATE_NO_WINDOW = 0x08000000 if sys.platform == "win32" else 0
+                
+                process = subprocess.Popen(
+                    cmd,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    encoding='utf-8',
+                    errors='replace',
+                    creationflags=CREATE_NO_WINDOW,
+                    bufsize=1
+                )
+                
+                try:
+                    stdout, stderr = process.communicate(timeout=30)
+                    return_code = process.returncode
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    stdout, stderr = process.communicate()
+                    return_code = -1
+                    stderr = "Timeout: A consulta excedeu o tempo limite de 30 segundos"
+                
+                # Limpa arquivo temporário
+                try:
+                    temp_sql_file.unlink()
+                except:
+                    pass
+                
+                if return_code == 0 and stdout:
+                    _parse_isql_output(stdout)
+                elif stderr:
+                    _show_error_output(stderr)
+                else:
+                    _show_success_message("Consulta executada. Nenhuma saída retornada.")
+                    
+            except Exception as e:
+                _show_error_output(f"Erro ao executar com ISQL: {str(e)}")
 
-        # Botões principais
+        def _parse_isql_output(output):
+            """Tenta parsear a saída do ISQL em formato tabular"""
+            lines = output.strip().split('\n')
+            clean_lines = []
+            
+            for line in lines:
+                clean_line = line.rstrip()
+                if (clean_line and 
+                    not clean_line.startswith('SQL>') and 
+                    not clean_line.startswith('CON>') and
+                    not clean_line.startswith('>')):
+                    clean_lines.append(clean_line)
+            
+            if not clean_lines:
+                _show_success_message("Consulta executada com sucesso. Nenhum resultado retornado.")
+                return
+
+            header_found = False
+            headers = []
+            data = []
+            
+            for line in clean_lines:
+                if '----' in line and not header_found:
+                    header_found = True
+                    continue
+                    
+                if header_found:
+                    if line.strip() and '----' not in line:
+                        data.append([line.strip()])
+                else:
+                    if line.strip():
+                        headers = [line.strip()]
+            
+            if headers and data:
+                max_width = 0
+                for line in data:
+                    line_width = len(str(line[0])) * 7 + 20
+                    if line_width > max_width:
+                        max_width = line_width
+                
+                header_width = len(headers[0]) * 9 + 25
+                optimal_width = min(max(max_width, header_width, 300), 1000)
+                
+                results_tree["columns"] = ["Resultado"]
+                results_tree.heading("Resultado", text=headers[0])
+                results_tree.column("Resultado", width=optimal_width, anchor="w", minwidth=100, stretch=False)
+                
+                for row in data:
+                    results_tree.insert("", "end", values=row)
+                
+                sql_status.config(text=f"✅ Consulta executada - {len(data)} linha(s) retornada(s)", foreground="green")
+            else:
+                _show_text_output(clean_lines)
+
+        def _show_tabular_results(columns, data):
+            setup_columns(columns, data)
+            sql_status.config(text=f"✅ Consulta executada - {len(data)} linha(s) retornada(s)", foreground="green")
+
+        def _show_text_output(lines):
+            max_width = 300
+            for line in lines:
+                line_width = len(str(line)) * 7 + 20
+                if line_width > max_width:
+                    max_width = line_width
+            
+            optimal_width = min(max_width, 1000)
+            
+            results_tree["columns"] = ["Resultado"]
+            results_tree.heading("Resultado", text="Resultado")
+            results_tree.column("Resultado", width=optimal_width, anchor="w", minwidth=100, stretch=False)
+            
+            for line in lines:
+                if line.strip():
+                    results_tree.insert("", "end", values=[line.strip()])
+            
+            sql_status.config(text=f"✅ Consulta executada - {len(lines)} linha(s) de saída", foreground="green")
+
+        def _show_error_output(error_text):
+            """Mostra mensagens de erro"""
+            lines = error_text.split('\n')
+            max_width = 300
+            for line in lines:
+                line_width = len(str(line)) * 7 + 20
+                if line_width > max_width:
+                    max_width = line_width
+            
+            optimal_width = min(max_width, 1000)
+            
+            results_tree["columns"] = ["Erro"]
+            results_tree.heading("Erro", text="Erro")
+            results_tree.column("Erro", width=optimal_width, anchor="w", minwidth=100, stretch=False)
+            
+            error_count = 0
+            for line in lines:
+                if line.strip():
+                    results_tree.insert("", "end", values=[line.strip()])
+                    error_count += 1
+            
+            sql_status.config(text=f"❌ Erro na execução - {error_count} mensagem(ns) de erro", foreground="red")
+
+        def _show_success_message(message):
+            """Mostra mensagem de sucesso"""
+            message_width = min(len(message) * 7 + 20, 800)
+            
+            results_tree["columns"] = ["Informação"]
+            results_tree.heading("Informação", text="Informação")
+            results_tree.column("Informação", width=message_width, anchor="w", minwidth=100, stretch=False)
+            
+            results_tree.insert("", "end", values=[message])
+            sql_status.config(text="✅ " + message, foreground="green")
+
+        def clear_editor():
+            """Limpa o editor SQL"""
+            sql_text.delete("1.0", tk.END)
+
+        def format_sql():
+            try:
+                text = sql_text.get("1.0", tk.END)
+                
+                # Aplica algumas formatações básicas
+                text = text.replace("SELECT", "\nSELECT")
+                text = text.replace("FROM", "\nFROM")
+                text = text.replace("WHERE", "\nWHERE")
+                text = text.replace("ORDER BY", "\nORDER BY")
+                text = text.replace("GROUP BY", "\nGROUP BY")
+                text = text.replace("HAVING", "\nHAVING")
+                text = text.replace("JOIN", "\nJOIN")
+                text = text.replace("LEFT JOIN", "\nLEFT JOIN")
+                text = text.replace("RIGHT JOIN", "\nRIGHT JOIN")
+                text = text.replace("INNER JOIN", "\nINNER JOIN")
+                
+                sql_text.delete("1.0", tk.END)
+                sql_text.insert("1.0", text)
+                
+                sql_status.config(text="✅ SQL formatado", foreground="green")
+            except Exception as e:
+                messagebox.showerror("Erro", f"Erro ao formatar SQL: {e}")
+
+        def show_tables():
+            """Mostra todas as tabelas do banco"""
+            tables_query = """SELECT 
+        RDB$RELATION_NAME as Tabela,
+        RDB$OWNER_NAME as Proprietario,
+        RDB$DESCRIPTION as Descricao
+    FROM RDB$RELATIONS 
+    WHERE RDB$SYSTEM_FLAG = 0 
+    ORDER BY RDB$RELATION_NAME;"""
+            sql_text.delete("1.0", tk.END)
+            sql_text.insert("1.0", tables_query)
+            execute_query()
+
+        def show_table_structure():
+            """Mostra a estrutura de uma tabela específica"""
+            table_name = simpledialog.askstring("Estrutura da Tabela", "Digite o nome da tabela:")
+            if table_name:
+                structure_query = f"""SELECT 
+        R.RDB$FIELD_NAME as Campo,
+        CASE F.RDB$FIELD_TYPE
+            WHEN 7 THEN 'SMALLINT'
+            WHEN 8 THEN 'INTEGER'
+            WHEN 10 THEN 'FLOAT'
+            WHEN 12 THEN 'DATE'
+            WHEN 13 THEN 'TIME'
+            WHEN 14 THEN 'CHAR'
+            WHEN 16 THEN 'BIGINT'
+            WHEN 27 THEN 'DOUBLE'
+            WHEN 35 THEN 'TIMESTAMP'
+            WHEN 37 THEN 'VARCHAR'
+            WHEN 261 THEN 'BLOB'
+            ELSE 'UNKNOWN'
+        END as Tipo,
+        F.RDB$FIELD_LENGTH as Tamanho,
+        CASE WHEN R.RDB$NULL_FLAG = 1 THEN 'NÃO' ELSE 'SIM' END as Nulo,
+        R.RDB$DEFAULT_SOURCE as Padrao
+    FROM RDB$RELATION_FIELDS R
+    JOIN RDB$FIELDS F ON R.RDB$FIELD_SOURCE = F.RDB$FIELD_NAME
+    WHERE R.RDB$RELATION_NAME = '{table_name.upper()}'
+    ORDER BY R.RDB$FIELD_POSITION;"""
+                sql_text.delete("1.0", tk.END)
+                sql_text.insert("1.0", structure_query)
+                execute_query()
+
+        def export_results():
+            """Exporta resultados para arquivo CSV"""
+            if not results_tree.get_children():
+                messagebox.showwarning("Aviso", "Não há resultados para exportar.")
+                return
+            
+            filename = filedialog.asksaveasfilename(
+                defaultextension=".csv",
+                filetypes=[("CSV files", "*.csv"), ("Todos os arquivos", "*.*")]
+            )
+            
+            if filename:
+                try:
+                    with open(filename, 'w', encoding='utf-8', newline='') as f:
+                        import csv
+                        writer = csv.writer(f, delimiter=';')
+                        
+                        # Escreve cabeçalho
+                        columns = results_tree["columns"]
+                        if columns:
+                            headers = [results_tree.heading(col)["text"] for col in columns]
+                            writer.writerow(headers)
+                        
+                        # Escreve dados
+                        for item in results_tree.get_children():
+                            values = results_tree.item(item, "values")
+                            writer.writerow(values)
+                    
+                    sql_status.config(text=f"✅ Resultados exportados para: {Path(filename).name}", foreground="green")
+                except Exception as e:
+                    messagebox.showerror("Erro", f"Erro ao exportar resultados: {e}")
+
+        # Botões de ação
         ttk.Button(btn_frame, 
-                text="▶️ Executar", 
-                command=lambda: execute_command(),
+                text="▶️ Executar (Ctrl+Enter)", 
+                command=execute_query,
                 cursor="hand2").pack(side="left", padx=5)
 
         ttk.Button(btn_frame, 
-                text="🛑 Parar", 
-                command=stop_command,
+                text="🗑️ Limpar Editor", 
+                command=clear_editor,
                 cursor="hand2").pack(side="left", padx=5)
 
         ttk.Button(btn_frame, 
-                text="🗑️ Limpar", 
-                command=clear_terminal,
+                text="📊 Format SQL", 
+                command=format_sql,
                 cursor="hand2").pack(side="left", padx=5)
 
         ttk.Button(btn_frame, 
-                text="📂 Diretório Atual", 
-                command=lambda: output_text.insert(tk.END, f"Diretório atual: {current_directory}\n"),
+                text="📋 Listar Tabelas", 
+                command=show_tables,
+                cursor="hand2").pack(side="left", padx=5)
+
+        ttk.Button(btn_frame, 
+                text="🔍 Estrutura da Tabela", 
+                command=show_table_structure,
+                cursor="hand2").pack(side="left", padx=5)
+
+        ttk.Button(btn_frame, 
+                text="💾 Exportar CSV", 
+                command=export_results,
                 cursor="hand2").pack(side="left", padx=5)
 
         # Bindings de teclado
         def on_key_press(event):
-            if event.keysym == 'Return':
-                execute_command()
-            elif event.keysym == 'Escape':
-                stop_command()
-            elif event.keysym == 'Up':
-                navigate_history("up")
-                return "break" 
-            elif event.keysym == 'Down':
-                navigate_history("down")
-                return "break" 
-            elif event.state & 0x4 and event.keysym == 'l':
-                clear_terminal()
-                return "break"
+            if event.state & 0x4 and event.keysym == 'Return':
+                execute_query()
+            elif event.keysym == 'F5':
+                execute_query()
 
-        cmd_entry.bind('<Return>', on_key_press)
-        cmd_entry.bind('<Escape>', on_key_press)
-        cmd_entry.bind('<Up>', on_key_press)
-        cmd_entry.bind('<Down>', on_key_press)
-        cmd_entry.bind('<Control-l>', on_key_press)
-        win.bind('<Escape>', on_key_press)
+        sql_text.bind('<Control-Return>', on_key_press)
+        sql_text.bind('<F5>', on_key_press)
+        win.bind('<F5>', on_key_press)
 
-        # Mensagem
-        output_text.insert(tk.END, f"Terminal CMD - Diretório atual: {current_directory}\n")
-        output_text.insert(tk.END, "Digite 'help' para ajuda.\n")
-        output_text.insert(tk.END, "Use ↑↓ para navegar no histórico de comandos.\n")
-        output_text.insert(tk.END, "-" * 60 + "\n\n")
+        # Foca no editor
+        sql_text.focus_set()
 
-        cmd_entry.focus()
-
-        self.log("💻 Terminal CMD de desenvolvimento aberto.", "info")
+        self.log(f"💻 Editor SQL aberto para: {db_name}", "info")
 
         def on_close():
-            nonlocal current_process
-            if current_process and current_process.poll() is None:
-                if messagebox.askyesno("Confirmar", "Há um comando em execução. Deseja realmente fechar?"):
-                    try:
-                        current_process.terminate()
-                    except:
-                        pass
             self.dev_mode = False
             self.dev_buffer = ""
             win.destroy()
