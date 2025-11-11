@@ -4597,12 +4597,34 @@ class GerenciadorFirebirdApp(tk.Tk):
         editor_frame = ttk.LabelFrame(main_frame, text="Editor SQL", padding=10)
         editor_frame.pack(fill="both", expand=True, pady=(0, 10))
 
+        # Container para editor e histórico
+        editor_container = ttk.Frame(editor_frame)
+        editor_container.pack(fill="both", expand=True)
+
+        # Frame para controles do editor
+        editor_controls_frame = ttk.Frame(editor_container)
+        editor_controls_frame.pack(fill="x", pady=(0, 5))
+
+        # Botão de histórico
+        ttk.Button(editor_controls_frame, 
+                text="📜 Histórico",
+                command=lambda: show_history_window(),
+                cursor="hand2",
+                width=12).pack(side="left", padx=(0, 10))
+
+        # Label de informações
+        history_info_label = ttk.Label(editor_controls_frame, 
+                                    text="F5 ou Ctrl+Enter para executar",
+                                    foreground="gray",
+                                    font=("Arial", 8))
+        history_info_label.pack(side="left")
+
         # Área de edição SQL
         sql_text = scrolledtext.ScrolledText(
-            editor_frame, 
+            editor_container, 
             font=("Consolas", 10),
             wrap=tk.WORD,
-            height=12
+            height=10
         )
         sql_text.pack(fill="both", expand=True)
 
@@ -4660,7 +4682,131 @@ class GerenciadorFirebirdApp(tk.Tk):
         btn_frame = ttk.Frame(main_frame)
         btn_frame.pack(fill="x")
 
+        # Histórico de comandos
+        sql_history = []
+        MAX_HISTORY_SIZE = 50
+
+        def add_to_history(sql_command):
+            """Adiciona comando ao histórico"""
+            if not sql_command.strip():
+                return
+                
+            # Remove do histórico se já existir
+            if sql_command in sql_history:
+                sql_history.remove(sql_command)
+            
+            # Adiciona no início
+            sql_history.insert(0, sql_command)
+            
+            # Limita o tamanho do histórico
+            if len(sql_history) > MAX_HISTORY_SIZE:
+                sql_history.pop()
+
+        def show_history_window():
+            """Mostra janela com histórico completo de comandos"""
+            if not sql_history:
+                messagebox.showinfo("Histórico", "Nenhum comando no histórico.")
+                return
+            
+            history_win = tk.Toplevel(win)
+            history_win.title("Histórico de Comandos SQL")
+            history_win.geometry("800x600")
+            history_win.transient(win)
+            history_win.grab_set()
+            
+            # Centraliza
+            x = win.winfo_x() + (win.winfo_width() // 2) - 400
+            y = win.winfo_y() + (win.winfo_height() // 2) - 300
+            history_win.geometry(f"+{x}+{y}")
+            
+            # Frame principal
+            main_history_frame = ttk.Frame(history_win, padding=15)
+            main_history_frame.pack(fill="both", expand=True)
+            
+            ttk.Label(main_history_frame, 
+                    text=f"📜 Histórico de Comandos ({len(sql_history)} comandos)",
+                    font=("Arial", 12, "bold")).pack(pady=(0, 10))
+            
+            # Frame de controles
+            history_controls_frame = ttk.Frame(main_history_frame)
+            history_controls_frame.pack(fill="both", expand=True, pady=(0, 10))
+            
+            # Lista de comandos
+            history_listbox = tk.Listbox(
+                history_controls_frame,
+                font=("Consolas", 9),
+                height=15,
+                selectmode="single"
+            )
+            history_listbox.pack(fill="both", expand=True, side="left")
+            
+            # Scrollbar para a lista
+            history_scrollbar = ttk.Scrollbar(history_controls_frame, orient="vertical", command=history_listbox.yview)
+            history_listbox.configure(yscrollcommand=history_scrollbar.set)
+            history_scrollbar.pack(side="right", fill="y")
+            
+            # Preenche a lista com o histórico
+            for i, cmd in enumerate(sql_history, 1):
+                preview = cmd[:100] + "..." if len(cmd) > 100 else cmd
+                history_listbox.insert(tk.END, f"{i:2d}. {preview}")
+            
+            # Frame de botões
+            history_btn_frame = ttk.Frame(main_history_frame)
+            history_btn_frame.pack(fill="x", pady=10)
+            
+            def load_selected_command():
+                """Carrega o comando selecionado para o editor"""
+                selection = history_listbox.curselection()
+                if selection:
+                    index = selection[0]
+                    sql_text.delete("1.0", tk.END)
+                    sql_text.insert("1.0", sql_history[index])
+                    history_win.destroy()
+                    sql_text.focus_set()
+            
+            def delete_selected_command():
+                """Remove o comando selecionado do histórico"""
+                selection = history_listbox.curselection()
+                if selection:
+                    index = selection[0]
+                    removed_cmd = sql_history.pop(index)
+                    history_listbox.delete(selection[0])
+                    history_listbox.delete(0, tk.END)
+                    for i, cmd in enumerate(sql_history, 1):
+                        preview = cmd[:100] + "..." if len(cmd) > 100 else cmd
+                        history_listbox.insert(tk.END, f"{i:2d}. {preview}")
+            
+            def clear_all_history():
+                """Limpa todo o histórico"""
+                if messagebox.askyesno("Confirmar", "Tem certeza que deseja limpar todo o histórico?"):
+                    sql_history.clear()
+                    history_listbox.delete(0, tk.END)
+            
+            ttk.Button(history_btn_frame, 
+                    text="📥 Carregar Selecionado",
+                    command=load_selected_command,
+                    cursor="hand2").pack(side="left", padx=5)
+            
+            ttk.Button(history_btn_frame,
+                    text="🗑️ Remover Selecionado",
+                    command=delete_selected_command,
+                    cursor="hand2").pack(side="left", padx=5)
+            
+            ttk.Button(history_btn_frame,
+                    text="💥 Limpar Tudo",
+                    command=clear_all_history,
+                    cursor="hand2").pack(side="left", padx=5)
+            
+            ttk.Button(history_btn_frame,
+                    text="❌ Fechar",
+                    command=history_win.destroy,
+                    cursor="hand2").pack(side="right", padx=5)
+            
+            # Duplo clique para carregar
+            history_listbox.bind("<Double-Button-1>", lambda e: load_selected_command())
+
         def execute_query_with_fbclient():
+            """Executa consulta"""
             try:
                 import fdb
             except ImportError:
@@ -4745,11 +4891,27 @@ class GerenciadorFirebirdApp(tk.Tk):
 
         def execute_query():
             """Executa a consulta SQL"""
+            sql_code = sql_text.get("1.0", tk.END).strip()
+            
+            # Verifica se há texto selecionado
+            try:
+                selected_text = sql_text.get(tk.SEL_FIRST, tk.SEL_LAST).strip()
+                if selected_text:
+                    sql_code = selected_text
+            except:
+                pass
+            
+            if not sql_code:
+                messagebox.showwarning("Aviso", "Digite uma consulta SQL para executar.")
+                return
+            
+            # Adiciona ao histórico
+            add_to_history(sql_code)
+            
             sql_status.config(text="🔄 Executando consulta...", foreground="blue")
             win.update()
             
             def run_query():
-                # Primeiro tenta com fdb
                 columns, results = execute_query_with_fbclient()
                 
                 def update_ui():
@@ -4969,11 +5131,19 @@ class GerenciadorFirebirdApp(tk.Tk):
             """Limpa o editor SQL"""
             sql_text.delete("1.0", tk.END)
 
+        def clear_results():
+            """Limpa os resultados"""
+            for item in results_tree.get_children():
+                results_tree.delete(item)
+            
+            results_tree["columns"] = []
+            sql_status.config(text="🗑️ Resultados limpos", foreground="gray")
+
         def format_sql():
+            """Formata o código SQL"""
             try:
                 text = sql_text.get("1.0", tk.END)
                 
-                # Aplica algumas formatações básicas
                 text = text.replace("SELECT", "\nSELECT")
                 text = text.replace("FROM", "\nFROM")
                 text = text.replace("WHERE", "\nWHERE")
@@ -5077,6 +5247,11 @@ class GerenciadorFirebirdApp(tk.Tk):
         ttk.Button(btn_frame, 
                 text="🗑️ Limpar Editor", 
                 command=clear_editor,
+                cursor="hand2").pack(side="left", padx=5)
+
+        ttk.Button(btn_frame, 
+                text="🗑️ Limpar Resultados", 
+                command=clear_results,
                 cursor="hand2").pack(side="left", padx=5)
 
         ttk.Button(btn_frame, 
