@@ -5,7 +5,7 @@
 
 [Setup]
 AppName=Gerenciador Firebird
-AppVersion=2025.11.03.1019
+AppVersion=2025.11.12.1331
 DefaultDirName=C:\GerenciadorFirebird
 DefaultGroupName=Gerenciador Firebird
 OutputDir=.
