@@ -65,7 +65,7 @@ DEFAULT_KEEP_BACKUPS = 5
 REPORTS_DIR = BASE_DIR / "Relatórios"
 
 # Constantes para controle de versão
-APP_VERSION = "2025.11.03.1019"
+APP_VERSION = "2025.11.12.1331"
 VERSION_CHECK_URL = "https://raw.githubusercontent.com/MMaffi/gerenciador_firebird/main/version.json"
 
 # Opções disponíveis de pageSize
@@ -1368,8 +1368,8 @@ class GerenciadorFirebirdApp(tk.Tk):
             
             # Tópicos/Especificações da versão
             especificacoes = [
-                            "✓ Nova organização de botões na aba ferramentas",
-                            "✓ Novas mensagens na função de migrar banco"
+                            "✓ Novo editor SQL integrado ao aplicativo",
+                            "✓ Coreções de funções para desempenho"
                         ]
             
             for especificacao in especificacoes:
@@ -1879,8 +1879,8 @@ class GerenciadorFirebirdApp(tk.Tk):
             self.after_cancel(self.dev_timer)
             del self.dev_timer
 
-        if self.dev_buffer.strip().lower() == "script":
-            self.open_script_console()
+        if self.dev_buffer.strip().lower() == "sql":
+            self.open_sql_console()
 
         self.dev_mode = False
         self.dev_buffer = ""
@@ -3197,14 +3197,76 @@ class GerenciadorFirebirdApp(tk.Tk):
 
     def _kill_by_pid(self):
         """Finaliza processo por PID específico"""
-        pid = simpledialog.askinteger("Finalizar por PID", "Digite o PID do processo:")
-        if pid is None:
-            return
-        
+        pid_dialog = tk.Toplevel(self)
+        pid_dialog.title("Finalizar por PID")
+        pid_dialog.geometry("300x170")
+        pid_dialog.resizable(False, False)
+        pid_dialog.transient(self)
+        pid_dialog.grab_set()
+
+        # Centraliza a janela
+        self.update_idletasks()
+        x = self.winfo_x() + (self.winfo_width() // 2) - 150
+        y = self.winfo_y() + (self.winfo_height() // 2) - 70
+        pid_dialog.geometry(f"+{x}+{y}")
+
+        # Configura o ícone
+        icon_path = BASE_DIR / "images" / "icon.ico"
+        if icon_path.exists():
+            pid_dialog.iconbitmap(str(icon_path))
+
+        # Frame principal
+        main_frame = ttk.Frame(pid_dialog, padding=20)
+        main_frame.pack(fill="both", expand=True)
+
+        # Label
+        ttk.Label(main_frame, text="Digite o PID do processo:",
+                font=("Arial", 10)).pack(pady=(0, 10))
+
+        # Entry para o PID
+        pid_var = tk.StringVar()
+        pid_entry = ttk.Entry(main_frame, textvariable=pid_var, width=15, font=("Arial", 12))
+        pid_entry.pack(pady=5)
+        pid_entry.focus()
+
+        # Frame para botões
+        btn_frame = ttk.Frame(main_frame)
+        btn_frame.pack(pady=15)
+
+        def confirm_pid():
+            """Confirma o PID digitado"""
+            pid_str = pid_var.get().strip()
+            if not pid_str:
+                messagebox.showwarning("Aviso", "Digite um PID válido.")
+                return
+
+            if not pid_str.isdigit():
+                messagebox.showwarning("Aviso", "O PID deve conter apenas números.")
+                pid_entry.focus()
+                return
+
+            pid = int(pid_str)
+            pid_dialog.destroy()
+            self._execute_kill_by_pid(pid)
+
+        def cancel_pid():
+            pid_dialog.destroy()
+
+        # Botões
+        ttk.Button(btn_frame, text="✅ Confirmar",
+                command=confirm_pid, cursor="hand2").pack(side="left", padx=5)
+        ttk.Button(btn_frame, text="❌ Cancelar",
+                command=cancel_pid, cursor="hand2").pack(side="left", padx=5)
+
+        # Enter confirma, ESC cancela
+        pid_entry.bind("<Return>", lambda e: confirm_pid())
+        pid_dialog.bind("<Escape>", lambda e: cancel_pid())
+
+    def _execute_kill_by_pid(self, pid):
         try:
             process = psutil.Process(pid)
             proc_name = process.name()
-            
+
             if not messagebox.askyesno(
                 "Confirmação",
                 f"Finalizar processo?\n\n"
@@ -3214,7 +3276,7 @@ class GerenciadorFirebirdApp(tk.Tk):
                 icon=messagebox.WARNING
             ):
                 return
-            
+
             try:
                 process.terminate()
                 process.wait(timeout=3)
@@ -3229,10 +3291,10 @@ class GerenciadorFirebirdApp(tk.Tk):
                 except Exception as e:
                     self.log(f"❌ Falha ao finalizar {proc_name} (PID: {pid}): {e}", "error")
                     messagebox.showerror("Erro", f"Falha ao finalizar processo {pid}:\n{e}")
-            
+
             # Atualiza lista
             self.after(1000, self._refresh_all_processes)
-            
+
         except psutil.NoSuchProcess:
             messagebox.showerror("Erro", f"Processo com PID {pid} não encontrado.")
         except Exception as e:
@@ -4475,18 +4537,28 @@ class GerenciadorFirebirdApp(tk.Tk):
         if path:
             var.set(path)
 
-    # ---------- CONSOLE DE DESENVOLVIMENTO ----------
-    def open_script_console(self):
-        """Abre console de desenvolvimento"""
+    # ---------- EDITOR DE SQL ----------
+    def open_sql_console(self):
+        """Abre console SQL para executar consultas no banco de dados"""
+        db_path = filedialog.askopenfilename(
+            title="Selecione o banco de dados para conectar",
+            filetypes=[("Firebird Database", "*.fdb"), ("Todos os arquivos", "*.*")]
+        )
+        
+        if not db_path:
+            return
+        
+        db_name = Path(db_path).name
+        
         win = tk.Toplevel(self)
-        win.title("Console de Desenvolvimento")
-        win.geometry("700x500")
-        win.minsize(600, 400)
+        win.title(f"Editor SQL - {db_name}")
+        win.geometry("1200x800")
+        win.minsize(1000, 600)
 
         # Centraliza
         self.update_idletasks()
-        x = self.winfo_x() + (self.winfo_width() // 2) - 350
-        y = self.winfo_y() + (self.winfo_height() // 2) - 250
+        x = self.winfo_x() + (self.winfo_width() // 2) - 600
+        y = self.winfo_y() + (self.winfo_height() // 2) - 400
         win.geometry(f"+{x}+{y}")
 
         # Ícone
@@ -4498,41 +4570,723 @@ class GerenciadorFirebirdApp(tk.Tk):
         win.grab_set()
         win.focus_force()
 
-        ttk.Label(win, text="Console de Desenvolvimento - Execute código Python:").pack(pady=5)
+        # Frame principal
+        main_frame = ttk.Frame(win)
+        main_frame.pack(fill="both", expand=True, padx=10, pady=10)
 
-        text = scrolledtext.ScrolledText(win, height=15, width=80, font=("Consolas", 10))
-        text.pack(padx=10, pady=5, fill="both", expand=True)
+        # Cabeçalho com informações do banco
+        header_frame = ttk.Frame(main_frame)
+        header_frame.pack(fill="x", pady=(0, 10))
 
-        output = scrolledtext.ScrolledText(win, height=8, width=80, font=("Consolas", 10), bg="#111", fg="#0f0")
-        output.pack(padx=10, pady=5, fill="both", expand=True)
+        ttk.Label(header_frame, 
+                text=f"🔍 Editor SQL - Conectado a: {db_name}",
+                font=("Arial", 11, "bold")).pack(anchor="w")
 
-        def run_script(event=None):
-            code = text.get("1.0", tk.END).strip()
-            output.delete("1.0", tk.END)
-            if not code:
+        ttk.Label(header_frame, 
+                text=f"📍 {db_path}",
+                font=("Arial", 9),
+                foreground="gray").pack(anchor="w")
+
+        # Frame do editor SQL
+        editor_frame = ttk.LabelFrame(main_frame, text="Editor SQL", padding=10)
+        editor_frame.pack(fill="both", expand=True, pady=(0, 10))
+
+        # Container para editor e histórico
+        editor_container = ttk.Frame(editor_frame)
+        editor_container.pack(fill="both", expand=True)
+
+        # Frame para controles do editor
+        editor_controls_frame = ttk.Frame(editor_container)
+        editor_controls_frame.pack(fill="x", pady=(0, 5))
+
+        # Botão de histórico
+        ttk.Button(editor_controls_frame, 
+                text="📜 Histórico",
+                command=lambda: show_history_window(),
+                cursor="hand2",
+                width=12).pack(side="left", padx=(0, 10))
+
+        # Label de informações
+        history_info_label = ttk.Label(editor_controls_frame, 
+                                    text="F9 ou Ctrl+Enter para executar",
+                                    foreground="gray",
+                                    font=("Arial", 8))
+        history_info_label.pack(side="left")
+
+        # Área de edição SQL
+        sql_text = scrolledtext.ScrolledText(
+            editor_container, 
+            font=("Consolas", 10),
+            wrap=tk.WORD,
+            height=10
+        )
+        sql_text.pack(fill="both", expand=True)
+
+        # Inserir template básico
+        template = """-- Digite suas consultas SQL aqui
+    -- Use F9 ou Ctrl+Enter para executar toda a consulta
+
+    -- Exemplo: Selecionar todas as tabelas
+    SELECT 
+        RDB$RELATION_NAME as tabela,
+        RDB$OWNER_NAME as proprietario
+    FROM RDB$RELATIONS 
+    WHERE RDB$SYSTEM_FLAG = 0 
+    ORDER BY RDB$RELATION_NAME;
+
+    -- Exemplo: Contar registros em uma tabela
+    -- SELECT COUNT(*) as total_registros FROM NOME_DA_TABELA;
+
+    """
+        sql_text.insert("1.0", template)
+
+        # Frame de resultados
+        results_frame = ttk.LabelFrame(main_frame, text="Resultados", padding=10)
+        results_frame.pack(fill="both", expand=True, pady=(0, 10))
+
+        # Container para treeview e scrollbars
+        tree_container = ttk.Frame(results_frame)
+        tree_container.pack(fill="both", expand=True)
+
+        # Treeview para mostrar resultados em tabela
+        results_tree = ttk.Treeview(tree_container, show="headings")
+        
+        # Scrollbars para o treeview
+        v_scrollbar = ttk.Scrollbar(tree_container, orient="vertical", command=results_tree.yview)
+        h_scrollbar = ttk.Scrollbar(tree_container, orient="horizontal", command=results_tree.xview)
+        results_tree.configure(yscrollcommand=v_scrollbar.set, xscrollcommand=h_scrollbar.set)
+        
+        # Layout usando grid para melhor controle
+        results_tree.grid(row=0, column=0, sticky="nsew")
+        v_scrollbar.grid(row=0, column=1, sticky="ns")
+        h_scrollbar.grid(row=1, column=0, sticky="ew")
+        
+        tree_container.grid_rowconfigure(0, weight=1)
+        tree_container.grid_columnconfigure(0, weight=1)
+
+        # Frame de status
+        status_frame = ttk.Frame(main_frame)
+        status_frame.pack(fill="x", pady=(0, 10))
+
+        sql_status = ttk.Label(status_frame, text="Pronto para executar consultas...", foreground="gray")
+        sql_status.pack(side="left")
+
+        # Frame de botões
+        btn_frame = ttk.Frame(main_frame)
+        btn_frame.pack(fill="x")
+
+        # Histórico de comandos
+        sql_history = []
+        MAX_HISTORY_SIZE = 50
+
+        def add_to_history(sql_command):
+            """Adiciona comando ao histórico"""
+            if not sql_command.strip():
                 return
+                
+            # Remove do histórico se já existir
+            if sql_command in sql_history:
+                sql_history.remove(sql_command)
+            
+            # Adiciona no início
+            sql_history.insert(0, sql_command)
+            
+            # Limita o tamanho do histórico
+            if len(sql_history) > MAX_HISTORY_SIZE:
+                sql_history.pop()
+
+        def show_history_window():
+            """Mostra janela com histórico completo de comandos"""
+            if not sql_history:
+                messagebox.showinfo("Histórico", "Nenhum comando no histórico.")
+                return
+            
+            history_win = tk.Toplevel(win)
+            history_win.title("Histórico de Comandos SQL")
+            history_win.geometry("800x600")
+            history_win.transient(win)
+            history_win.grab_set()
+            
+            # Centraliza
+            x = win.winfo_x() + (win.winfo_width() // 2) - 400
+            y = win.winfo_y() + (win.winfo_height() // 2) - 300
+            history_win.geometry(f"+{x}+{y}")
+
+            # Ícone
+            icon_path = BASE_DIR / "images" / "icon.ico"
+            if icon_path.exists():
+                history_win.iconbitmap(str(icon_path))
+            
+            # Frame principal
+            main_history_frame = ttk.Frame(history_win, padding=15)
+            main_history_frame.pack(fill="both", expand=True)
+            
+            ttk.Label(main_history_frame, 
+                    text=f"📜 Histórico de Comandos ({len(sql_history)} comandos)",
+                    font=("Arial", 12, "bold")).pack(pady=(0, 10))
+            
+            # Frame de controles
+            history_controls_frame = ttk.Frame(main_history_frame)
+            history_controls_frame.pack(fill="both", expand=True, pady=(0, 10))
+            
+            # Lista de comandos
+            history_listbox = tk.Listbox(
+                history_controls_frame,
+                font=("Consolas", 9),
+                height=15,
+                selectmode="single"
+            )
+            history_listbox.pack(fill="both", expand=True, side="left")
+            
+            # Scrollbar para a lista
+            history_scrollbar = ttk.Scrollbar(history_controls_frame, orient="vertical", command=history_listbox.yview)
+            history_listbox.configure(yscrollcommand=history_scrollbar.set)
+            history_scrollbar.pack(side="right", fill="y")
+            
+            # Preenche a lista com o histórico
+            for i, cmd in enumerate(sql_history, 1):
+                preview = cmd[:100] + "..." if len(cmd) > 100 else cmd
+                history_listbox.insert(tk.END, f"{i:2d}. {preview}")
+            
+            # Frame de botões
+            history_btn_frame = ttk.Frame(main_history_frame)
+            history_btn_frame.pack(fill="x", pady=10)
+            
+            def load_selected_command():
+                """Carrega o comando selecionado para o editor"""
+                selection = history_listbox.curselection()
+                if selection:
+                    index = selection[0]
+                    sql_text.delete("1.0", tk.END)
+                    sql_text.insert("1.0", sql_history[index])
+                    history_win.destroy()
+                    sql_text.focus_set()
+            
+            def delete_selected_command():
+                """Remove o comando selecionado do histórico"""
+                selection = history_listbox.curselection()
+                if selection:
+                    index = selection[0]
+                    removed_cmd = sql_history.pop(index)
+                    history_listbox.delete(selection[0])
+                    history_listbox.delete(0, tk.END)
+                    for i, cmd in enumerate(sql_history, 1):
+                        preview = cmd[:100] + "..." if len(cmd) > 100 else cmd
+                        history_listbox.insert(tk.END, f"{i:2d}. {preview}")
+            
+            def clear_all_history():
+                """Limpa todo o histórico"""
+                if messagebox.askyesno("Confirmar", "Tem certeza que deseja limpar todo o histórico?"):
+                    sql_history.clear()
+                    history_listbox.delete(0, tk.END)
+            
+            ttk.Button(history_btn_frame, 
+                    text="📥 Carregar Selecionado",
+                    command=load_selected_command,
+                    cursor="hand2").pack(side="left", padx=5)
+            
+            ttk.Button(history_btn_frame,
+                    text="🗑️ Remover Selecionado",
+                    command=delete_selected_command,
+                    cursor="hand2").pack(side="left", padx=5)
+            
+            ttk.Button(history_btn_frame,
+                    text="💥 Limpar Tudo",
+                    command=clear_all_history,
+                    cursor="hand2").pack(side="left", padx=5)
+            
+            ttk.Button(history_btn_frame,
+                    text="❌ Fechar",
+                    command=history_win.destroy,
+                    cursor="hand2").pack(side="right", padx=5)
+            
+            # Duplo clique para carregar
+            history_listbox.bind("<Double-Button-1>", lambda e: load_selected_command())
+
+        def execute_query_with_fbclient():
+            """Executa consulta"""
             try:
-                local_vars = {
-                    'app': self,
-                    'config': self.conf,
-                    'Path': Path,
-                    'tk': tk,
-                    'ttk': ttk,
-                    'messagebox': messagebox,
-                    'filedialog': filedialog
-                }
-                exec(code, globals(), local_vars)
-                output.insert(tk.END, "✅ Execução concluída com sucesso.\n")
+                import fdb
+            except ImportError:
+                messagebox.showerror("Erro", "Biblioteca fdb não encontrada. Instale com: pip install fdb")
+                return None, None
+            
+            sql_code = sql_text.get("1.0", tk.END).strip()
+            
+            # Verifica se há texto selecionado
+            try:
+                selected_text = sql_text.get(tk.SEL_FIRST, tk.SEL_LAST).strip()
+                if selected_text:
+                    sql_code = selected_text
+            except:
+                pass
+            
+            if not sql_code:
+                return None, None
+            
+            try:
+                # Conecta ao banco usando fdb
+                conn = fdb.connect(
+                    host=self.conf.get('firebird_host', 'localhost'),
+                    database=db_path,
+                    user=self.conf.get("firebird_user", "SYSDBA"),
+                    password=self.conf.get("firebird_password", "masterkey"),
+                    port=int(self.conf.get("firebird_port", "26350"))
+                )
+                
+                cursor = conn.cursor()
+                cursor.execute(sql_code)
+                
+                # Obtém os nomes das colunas
+                columns = [desc[0] for desc in cursor.description]
+                
+                # Obtém todos os resultados
+                results = cursor.fetchall()
+                
+                cursor.close()
+                conn.close()
+                
+                return columns, results
+                
             except Exception as e:
-                output.insert(tk.END, f"❌ Erro: {e}\n")
+                return None, f"Erro na consulta: {str(e)}"
 
-        # Botão executar
-        ttk.Button(win, text="▶️ Executar Script", command=run_script, cursor="hand2").pack(pady=5)
+        def calculate_optimal_column_widths(columns, data):
+            """Calcula larguras baseadas no maior conteúdo de cada coluna"""
+            widths = {}
+            
+            for i, col in enumerate(columns):
+                # Largura baseada no cabeçalho
+                header_width = len(str(col)) * 9 + 25
+                
+                # Largura baseada nos dados - encontra o maior conteúdo
+                max_data_width = 0
+                for row in data:
+                    if i < len(row):
+                        cell_content = str(row[i]) if row[i] is not None else ""
+                        cell_width = len(cell_content) * 7 + 20
+                        if cell_width > max_data_width:
+                            max_data_width = cell_width
+                
+                optimal_width = max(header_width, max_data_width, 100)
+                
+                widths[col] = min(optimal_width, 800)
+            
+            return widths
 
-        # Atalho Shift + Enter
-        text.bind("<Shift-Return>", run_script)
+        def setup_columns(columns, data):
+            """Configura as colunas do treeview com larguras ótimas"""
+            results_tree["columns"] = columns
+            
+            optimal_widths = calculate_optimal_column_widths(columns, data)
+            
+            for col in columns:
+                results_tree.heading(col, text=col)
+                results_tree.column(col, width=optimal_widths[col], anchor="w", minwidth=80, stretch=False)
+            
+            for row in data:
+                results_tree.insert("", "end", values=row)
 
-        self.log("🧩 Console de desenvolvimento aberto.", "info")
+        def execute_query():
+            """Executa a consulta SQL"""
+            sql_code = sql_text.get("1.0", tk.END).strip()
+            
+            # Verifica se há texto selecionado
+            try:
+                selected_text = sql_text.get(tk.SEL_FIRST, tk.SEL_LAST).strip()
+                if selected_text:
+                    sql_code = selected_text
+            except:
+                pass
+            
+            if not sql_code:
+                messagebox.showwarning("Aviso", "Digite uma consulta SQL para executar.")
+                return
+            
+            # Adiciona ao histórico
+            add_to_history(sql_code)
+            
+            sql_status.config(text="🔄 Executando consulta...", foreground="blue")
+            win.update()
+            
+            def run_query():
+                columns, results = execute_query_with_fbclient()
+                
+                def update_ui():
+                    # Limpa resultados anteriores
+                    for item in results_tree.get_children():
+                        results_tree.delete(item)
+                    
+                    # Limpa colunas existentes
+                    results_tree["columns"] = []
+                    
+                    if columns is not None and results is not None:
+                        if isinstance(results, list):
+                            # Sucesso
+                            _show_tabular_results(columns, results)
+                        else:
+                            # Erro
+                            _show_error_output(results)
+                    else:
+                        _execute_with_isql()
+                
+                self.after(0, update_ui)
+            
+            # Executa em thread separada
+            threading.Thread(target=run_query, daemon=True).start()
+
+        def _execute_with_isql():
+            """Executa com ISQL como fallback"""
+            try:
+                sql_code = sql_text.get("1.0", tk.END).strip()
+                
+                # Verifica se há texto selecionado
+                try:
+                    selected_text = sql_text.get(tk.SEL_FIRST, tk.SEL_LAST).strip()
+                    if selected_text:
+                        sql_code = selected_text
+                except:
+                    pass
+                
+                isql = self.conf.get("isql_path") or find_executable("isql.exe")
+                if not isql:
+                    _show_error_output("isql.exe não encontrado.")
+                    return
+                
+                # Cria arquivo temporário com o SQL
+                temp_dir = Path(tempfile.gettempdir())
+                temp_sql_file = temp_dir / f"temp_query_{datetime.now().strftime('%Y%m%d_%H%M%S')}.sql"
+                
+                # Escreve o SQL no arquivo temporário
+                with open(temp_sql_file, 'w', encoding='utf-8') as f:
+                    f.write("SET HEADING ON;\n")
+                    f.write("SET STATS OFF;\n")
+                    f.write(sql_code)
+                    if not sql_code.strip().endswith(';'):
+                        f.write(";")
+                
+                # Comando ISQL
+                connection_string = f"{self.conf.get('firebird_host', 'localhost')}/{self.conf.get('firebird_port', '26350')}:{db_path}"
+                
+                cmd = [
+                    isql,
+                    connection_string,
+                    "-user", self.conf.get("firebird_user", "SYSDBA"),
+                    "-pass", self.conf.get("firebird_password", "masterkey"),
+                    "-i", str(temp_sql_file)
+                ]
+                
+                CREATE_NO_WINDOW = 0x08000000 if sys.platform == "win32" else 0
+                
+                process = subprocess.Popen(
+                    cmd,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    encoding='utf-8',
+                    errors='replace',
+                    creationflags=CREATE_NO_WINDOW,
+                    bufsize=1
+                )
+                
+                try:
+                    stdout, stderr = process.communicate(timeout=30)
+                    return_code = process.returncode
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    stdout, stderr = process.communicate()
+                    return_code = -1
+                    stderr = "Timeout: A consulta excedeu o tempo limite de 30 segundos"
+                
+                # Limpa arquivo temporário
+                try:
+                    temp_sql_file.unlink()
+                except:
+                    pass
+                
+                if return_code == 0 and stdout:
+                    _parse_isql_output(stdout)
+                elif stderr:
+                    _show_error_output(stderr)
+                else:
+                    _show_success_message("Consulta executada. Nenhuma saída retornada.")
+                    
+            except Exception as e:
+                _show_error_output(f"Erro ao executar com ISQL: {str(e)}")
+
+        def _parse_isql_output(output):
+            """Tenta parsear a saída do ISQL em formato tabular"""
+            lines = output.strip().split('\n')
+            clean_lines = []
+            
+            for line in lines:
+                clean_line = line.rstrip()
+                if (clean_line and 
+                    not clean_line.startswith('SQL>') and 
+                    not clean_line.startswith('CON>') and
+                    not clean_line.startswith('>')):
+                    clean_lines.append(clean_line)
+            
+            if not clean_lines:
+                _show_success_message("Consulta executada com sucesso. Nenhum resultado retornado.")
+                return
+
+            header_found = False
+            headers = []
+            data = []
+            
+            for line in clean_lines:
+                if '----' in line and not header_found:
+                    header_found = True
+                    continue
+                    
+                if header_found:
+                    if line.strip() and '----' not in line:
+                        data.append([line.strip()])
+                else:
+                    if line.strip():
+                        headers = [line.strip()]
+            
+            if headers and data:
+                max_width = 0
+                for line in data:
+                    line_width = len(str(line[0])) * 7 + 20
+                    if line_width > max_width:
+                        max_width = line_width
+                
+                header_width = len(headers[0]) * 9 + 25
+                optimal_width = min(max(max_width, header_width, 300), 1000)
+                
+                results_tree["columns"] = ["Resultado"]
+                results_tree.heading("Resultado", text=headers[0])
+                results_tree.column("Resultado", width=optimal_width, anchor="w", minwidth=100, stretch=False)
+                
+                for row in data:
+                    results_tree.insert("", "end", values=row)
+                
+                sql_status.config(text=f"✅ Consulta executada - {len(data)} linha(s) retornada(s)", foreground="green")
+            else:
+                _show_text_output(clean_lines)
+
+        def _show_tabular_results(columns, data):
+            setup_columns(columns, data)
+            sql_status.config(text=f"✅ Consulta executada - {len(data)} linha(s) retornada(s)", foreground="green")
+
+        def _show_text_output(lines):
+            max_width = 300
+            for line in lines:
+                line_width = len(str(line)) * 7 + 20
+                if line_width > max_width:
+                    max_width = line_width
+            
+            optimal_width = min(max_width, 1000)
+            
+            results_tree["columns"] = ["Resultado"]
+            results_tree.heading("Resultado", text="Resultado")
+            results_tree.column("Resultado", width=optimal_width, anchor="w", minwidth=100, stretch=False)
+            
+            for line in lines:
+                if line.strip():
+                    results_tree.insert("", "end", values=[line.strip()])
+            
+            sql_status.config(text=f"✅ Consulta executada - {len(lines)} linha(s) de saída", foreground="green")
+
+        def _show_error_output(error_text):
+            """Mostra mensagens de erro"""
+            lines = error_text.split('\n')
+            max_width = 300
+            for line in lines:
+                line_width = len(str(line)) * 7 + 20
+                if line_width > max_width:
+                    max_width = line_width
+            
+            optimal_width = min(max_width, 1000)
+            
+            results_tree["columns"] = ["Erro"]
+            results_tree.heading("Erro", text="Erro")
+            results_tree.column("Erro", width=optimal_width, anchor="w", minwidth=100, stretch=False)
+            
+            error_count = 0
+            for line in lines:
+                if line.strip():
+                    results_tree.insert("", "end", values=[line.strip()])
+                    error_count += 1
+            
+            sql_status.config(text=f"❌ Erro na execução - {error_count} mensagem(ns) de erro", foreground="red")
+
+        def _show_success_message(message):
+            """Mostra mensagem de sucesso"""
+            message_width = min(len(message) * 7 + 20, 800)
+            
+            results_tree["columns"] = ["Informação"]
+            results_tree.heading("Informação", text="Informação")
+            results_tree.column("Informação", width=message_width, anchor="w", minwidth=100, stretch=False)
+            
+            results_tree.insert("", "end", values=[message])
+            sql_status.config(text="✅ " + message, foreground="green")
+
+        def clear_editor():
+            """Limpa o editor SQL"""
+            sql_text.delete("1.0", tk.END)
+
+        def clear_results():
+            """Limpa os resultados"""
+            for item in results_tree.get_children():
+                results_tree.delete(item)
+            
+            results_tree["columns"] = []
+            sql_status.config(text="🗑️ Resultados limpos", foreground="gray")
+
+        def format_sql():
+            """Formata o código SQL"""
+            try:
+                text = sql_text.get("1.0", tk.END)
+                
+                text = text.replace("SELECT", "\nSELECT")
+                text = text.replace("FROM", "\nFROM")
+                text = text.replace("WHERE", "\nWHERE")
+                text = text.replace("ORDER BY", "\nORDER BY")
+                text = text.replace("GROUP BY", "\nGROUP BY")
+                text = text.replace("HAVING", "\nHAVING")
+                text = text.replace("JOIN", "\nJOIN")
+                text = text.replace("LEFT JOIN", "\nLEFT JOIN")
+                text = text.replace("RIGHT JOIN", "\nRIGHT JOIN")
+                text = text.replace("INNER JOIN", "\nINNER JOIN")
+                
+                sql_text.delete("1.0", tk.END)
+                sql_text.insert("1.0", text)
+                
+                sql_status.config(text="✅ SQL formatado", foreground="green")
+            except Exception as e:
+                messagebox.showerror("Erro", f"Erro ao formatar SQL: {e}")
+
+        def show_tables():
+            """Mostra todas as tabelas do banco"""
+            tables_query = """SELECT 
+        RDB$RELATION_NAME as Tabela,
+        RDB$OWNER_NAME as Proprietario,
+        RDB$DESCRIPTION as Descricao
+    FROM RDB$RELATIONS 
+    WHERE RDB$SYSTEM_FLAG = 0 
+    ORDER BY RDB$RELATION_NAME;"""
+            sql_text.delete("1.0", tk.END)
+            sql_text.insert("1.0", tables_query)
+            execute_query()
+
+        def show_table_structure():
+            """Mostra a estrutura de uma tabela específica"""
+            table_name = simpledialog.askstring("Estrutura da Tabela", "Digite o nome da tabela:")
+            if table_name:
+                structure_query = f"""SELECT 
+        R.RDB$FIELD_NAME as Campo,
+        CASE F.RDB$FIELD_TYPE
+            WHEN 7 THEN 'SMALLINT'
+            WHEN 8 THEN 'INTEGER'
+            WHEN 10 THEN 'FLOAT'
+            WHEN 12 THEN 'DATE'
+            WHEN 13 THEN 'TIME'
+            WHEN 14 THEN 'CHAR'
+            WHEN 16 THEN 'BIGINT'
+            WHEN 27 THEN 'DOUBLE'
+            WHEN 35 THEN 'TIMESTAMP'
+            WHEN 37 THEN 'VARCHAR'
+            WHEN 261 THEN 'BLOB'
+            ELSE 'UNKNOWN'
+        END as Tipo,
+        F.RDB$FIELD_LENGTH as Tamanho,
+        CASE WHEN R.RDB$NULL_FLAG = 1 THEN 'NÃO' ELSE 'SIM' END as Nulo,
+        R.RDB$DEFAULT_SOURCE as Padrao
+    FROM RDB$RELATION_FIELDS R
+    JOIN RDB$FIELDS F ON R.RDB$FIELD_SOURCE = F.RDB$FIELD_NAME
+    WHERE R.RDB$RELATION_NAME = '{table_name.upper()}'
+    ORDER BY R.RDB$FIELD_POSITION;"""
+                sql_text.delete("1.0", tk.END)
+                sql_text.insert("1.0", structure_query)
+                execute_query()
+
+        def export_results():
+            """Exporta resultados para arquivo CSV"""
+            if not results_tree.get_children():
+                messagebox.showwarning("Aviso", "Não há resultados para exportar.")
+                return
+            
+            filename = filedialog.asksaveasfilename(
+                defaultextension=".csv",
+                filetypes=[("CSV files", "*.csv"), ("Todos os arquivos", "*.*")]
+            )
+            
+            if filename:
+                try:
+                    with open(filename, 'w', encoding='utf-8', newline='') as f:
+                        import csv
+                        writer = csv.writer(f, delimiter=';')
+                        
+                        # Escreve cabeçalho
+                        columns = results_tree["columns"]
+                        if columns:
+                            headers = [results_tree.heading(col)["text"] for col in columns]
+                            writer.writerow(headers)
+                        
+                        # Escreve dados
+                        for item in results_tree.get_children():
+                            values = results_tree.item(item, "values")
+                            writer.writerow(values)
+                    
+                    sql_status.config(text=f"✅ Resultados exportados para: {Path(filename).name}", foreground="green")
+                except Exception as e:
+                    messagebox.showerror("Erro", f"Erro ao exportar resultados: {e}")
+
+        # Botões de ação
+        ttk.Button(btn_frame, 
+                text="▶️ Executar (Ctrl+Enter)", 
+                command=execute_query,
+                cursor="hand2").pack(side="left", padx=5)
+
+        ttk.Button(btn_frame, 
+                text="🗑️ Limpar Editor", 
+                command=clear_editor,
+                cursor="hand2").pack(side="left", padx=5)
+
+        ttk.Button(btn_frame, 
+                text="🗑️ Limpar Resultados", 
+                command=clear_results,
+                cursor="hand2").pack(side="left", padx=5)
+
+        ttk.Button(btn_frame, 
+                text="📊 Format SQL", 
+                command=format_sql,
+                cursor="hand2").pack(side="left", padx=5)
+
+        ttk.Button(btn_frame, 
+                text="📋 Listar Tabelas", 
+                command=show_tables,
+                cursor="hand2").pack(side="left", padx=5)
+
+        ttk.Button(btn_frame, 
+                text="🔍 Estrutura da Tabela", 
+                command=show_table_structure,
+                cursor="hand2").pack(side="left", padx=5)
+
+        ttk.Button(btn_frame, 
+                text="💾 Exportar CSV", 
+                command=export_results,
+                cursor="hand2").pack(side="left", padx=5)
+
+        # Bindings de teclado
+        def on_key_press(event):
+            if event.state & 0x4 and event.keysym == 'Return':
+                execute_query()
+            elif event.keysym == 'F9':
+                execute_query()
+
+        sql_text.bind('<Control-Return>', on_key_press)
+        sql_text.bind('<F9>', on_key_press)
+        win.bind('<F9>', on_key_press)
+
+        # Foca no editor
+        sql_text.focus_set()
+
+        self.log(f"💻 Editor SQL aberto para: {db_name}", "info")
 
         def on_close():
             self.dev_mode = False

@@ -1,5 +1,5 @@
 {
-    "latest_version": "2025.11.03.1019",
+    "latest_version": "2025.11.12.1331",
     "download_url": "https://github.com/MMaffi/gerenciador_firebird/releases/latest",
-    "release_notes": "✓ Nova organização de botões na aba ferramentas\n✓ Novas mensagens na função de migrar banco"
+    "release_notes": "✓ Novo editor SQL integrado ao aplicativo\n✓ Coreções de funções para desempenho"
 }
