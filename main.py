@@ -1879,8 +1879,8 @@ class GerenciadorFirebirdApp(tk.Tk):
             self.after_cancel(self.dev_timer)
             del self.dev_timer
 
-        if self.dev_buffer.strip().lower() == "script":
-            self.open_script_console()
+        if self.dev_buffer.strip().lower() == "sql":
+            self.open_sql_console()
 
         self.dev_mode = False
         self.dev_buffer = ""
@@ -1897,12 +1897,6 @@ class GerenciadorFirebirdApp(tk.Tk):
                 self.dev_buffer = self.dev_buffer[:-1]
             else:
                 self.dev_buffer += event.char
-                
-            # Verifica se digitou "SQL"
-            if self.dev_buffer.upper().endswith("SQL"):
-                self.open_sql_console()
-                self.dev_mode = False
-                self.dev_buffer = ""
 
     # ---------- EXECUÇÃO DE COMANDOS ----------
     def run_command(self, cmd, on_finish=None):
@@ -4614,7 +4608,7 @@ class GerenciadorFirebirdApp(tk.Tk):
 
         # Label de informações
         history_info_label = ttk.Label(editor_controls_frame, 
-                                    text="F5 ou Ctrl+Enter para executar",
+                                    text="F9 ou Ctrl+Enter para executar",
                                     foreground="gray",
                                     font=("Arial", 8))
         history_info_label.pack(side="left")
@@ -4630,8 +4624,7 @@ class GerenciadorFirebirdApp(tk.Tk):
 
         # Inserir template básico
         template = """-- Digite suas consultas SQL aqui
-    -- Use Ctrl+Enter para executar a consulta selecionada
-    -- Use F5 para executar toda a consulta
+    -- Use F9 ou Ctrl+Enter para executar toda a consulta
 
     -- Exemplo: Selecionar todas as tabelas
     SELECT 
@@ -4718,6 +4711,11 @@ class GerenciadorFirebirdApp(tk.Tk):
             x = win.winfo_x() + (win.winfo_width() // 2) - 400
             y = win.winfo_y() + (win.winfo_height() // 2) - 300
             history_win.geometry(f"+{x}+{y}")
+
+            # Ícone
+            icon_path = BASE_DIR / "images" / "icon.ico"
+            if icon_path.exists():
+                history_win.iconbitmap(str(icon_path))
             
             # Frame principal
             main_history_frame = ttk.Frame(history_win, padding=15)
@@ -5278,12 +5276,12 @@ class GerenciadorFirebirdApp(tk.Tk):
         def on_key_press(event):
             if event.state & 0x4 and event.keysym == 'Return':
                 execute_query()
-            elif event.keysym == 'F5':
+            elif event.keysym == 'F9':
                 execute_query()
 
         sql_text.bind('<Control-Return>', on_key_press)
-        sql_text.bind('<F5>', on_key_press)
-        win.bind('<F5>', on_key_press)
+        sql_text.bind('<F9>', on_key_press)
+        win.bind('<F9>', on_key_press)
 
         # Foca no editor
         sql_text.focus_set()
