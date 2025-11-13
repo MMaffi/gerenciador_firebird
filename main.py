@@ -1530,6 +1530,8 @@ class GerenciadorFirebirdApp(tk.Tk):
                 import webbrowser
                 webbrowser.open(update_info['download_url'])
                 update_win.destroy()
+                update_win.after(2000, lambda: sys.exit(0))
+                
             except Exception as e:
                 messagebox.showerror("Erro", f"Não foi possível abrir o link de download:\n{e}")
         
