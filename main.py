@@ -17,7 +17,7 @@ from pathlib import Path
 import threading
 import logging
 import tkinter as tk
-from tkinter import ttk, filedialog, messagebox, scrolledtext, simpledialog
+from tkinter import ttk, filedialog, messagebox, scrolledtext, simpledialog, Label
 import time
 import schedule
 from typing import Dict, List, Optional
@@ -1525,11 +1525,15 @@ class GerenciadorFirebirdApp(tk.Tk):
         btn_frame.pack(fill="x", pady=15)
         
         def download_update():
-            """Abre o link de download no navegador padrão"""
             try:
                 import webbrowser
                 webbrowser.open(update_info['download_url'])
-                update_win.destroy()
+                
+                Label(update_win, text="Após baixar, execute o instalador manualmente. Fechando aplicação em 5 segundos...", 
+                    fg="green", font=("Arial", 10), justify='center').pack(pady=10)
+                
+                update_win.after(5000, lambda: [update_win.destroy(), sys.exit(0)])
+                
             except Exception as e:
                 messagebox.showerror("Erro", f"Não foi possível abrir o link de download:\n{e}")
         
