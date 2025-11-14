@@ -687,7 +687,6 @@ class GerenciadorFirebirdApp(tk.Tk):
         username_var = tk.StringVar()
         username_entry = ttk.Entry(main_frame, textvariable=username_var, width=30, font=("Arial", 10))
         username_entry.pack(fill="x", pady=(0, 15))
-        username_entry.focus()
         
         ttk.Label(main_frame, text="Senha:", font=("Arial", 9, "bold")).pack(anchor="w", pady=(5, 5))
         password_var = tk.StringVar()
@@ -717,6 +716,10 @@ class GerenciadorFirebirdApp(tk.Tk):
             
             if self.user_manager.authenticate(username, password):
                 self.current_user = self.user_manager.current_user
+                
+                # Salva o último usuário logado
+                self.conf["last_user"] = username
+                save_config(self.conf)
                 
                 # Salva de login automático
                 if auto_login_var.get():
@@ -762,12 +765,14 @@ class GerenciadorFirebirdApp(tk.Tk):
         # Enter para logar
         password_entry.bind("<Return>", lambda e: attempt_login())
         
-        # Carrega último usuário se existir
-        auto_login_user = self.conf.get("auto_login_user", "")
-        if auto_login_user:
-            username_var.set(auto_login_user)
+        # CARREGA O ÚLTIMO USUÁRIO LOGADO
+        last_user = self.conf.get("last_user", "")
+        if last_user and not self.conf.get("auto_login", False):
+            username_var.set(last_user)
             password_entry.focus()
-    
+        else:
+            username_entry.focus()
+        
         # Espera o login ser feito
         self.wait_window(login_win)
 
@@ -829,6 +834,10 @@ class GerenciadorFirebirdApp(tk.Tk):
     def logoff(self):
         """Faz logoff do usuário atual"""
         if messagebox.askyesno("Confirmar Logoff", "Deseja realmente sair da aplicação?"):
+            # Salva o último usuário antes de fazer logoff
+            if self.current_user:
+                self.conf["last_user"] = self.current_user['username']
+            
             # Remove informações de login automático
             self.conf["auto_login"] = False
             self.conf["auto_login_user"] = ""
