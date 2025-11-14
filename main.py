@@ -868,33 +868,87 @@ class GerenciadorFirebirdApp(tk.Tk):
                             )
                             users_btn.pack(side="left", padx=2)
 
+    def on_login_close(self):
+        """Fecha totalmente o programa quando o X da tela de login é clicado."""
+        self._logging_off = False
+        self.quit()
+        self.destroy()
+        sys.exit(0)
+
     def logoff(self):
         """Faz logoff do usuário atual e volta para tela de login"""
-        if messagebox.askyesno("Confirmar Logoff", "Deseja realmente sair da aplicação?"):
-            # Salva o último usuário antes de fazer logoff
+        if not messagebox.askyesno("Confirmar Logoff", "Deseja realmente sair da aplicação?"):
+            return
+
+        self._logging_off = True
+
+        try:
+            # Salva o último usuário
             if self.current_user:
                 self.conf["last_user"] = self.current_user['username']
-            
-            # Remove informações de login automático
+
+            # Remove login automático
             self.conf["auto_login"] = False
             self.conf["auto_login_user"] = ""
             self.conf["auto_login_password"] = ""
             save_config(self.conf)
-            
-            # Para o agendador
-            self.stop_scheduler()
-            
-            # Limpa a interface atual
+
+            # Para o agendador e outras tasks de background
+            try:
+                self.stop_scheduler()
+            except Exception:
+                pass
+
+            try:
+                self.state("normal")
+            except Exception:
+                pass
+
             for widget in self.winfo_children():
-                widget.destroy()
-            
-            # Reseta o usuário atual
+                try:
+                    widget.destroy()
+                except Exception:
+                    pass
+
+            # Reset do usuário
             self.current_user = None
             self.user_manager.current_user = None
-            
-            # Volta para a tela de login
-            self._setup_login_window()
-            self.show_login_screen()
+
+            login_w, login_h = 400, 450
+            self.resizable(False, False)
+            try:
+                self.minsize(login_w, login_h)
+            except Exception:
+                pass
+
+            # Centraliza a janela na tela
+            x = (self.winfo_screenwidth() // 2) - (login_w // 2)
+            y = (self.winfo_screenheight() // 2) - (login_h // 2)
+            self.geometry(f"{login_w}x{login_h}+{x}+{y}")
+
+            self.title("Login - Gerenciador Firebird")
+            icon_path = BASE_DIR / "images" / "icon.ico"
+            if icon_path.exists():
+                try:
+                    self.iconbitmap(str(icon_path))
+                except Exception:
+                    pass
+
+            self.update_idletasks()
+
+            try:
+                self.show_login_screen()
+                self.protocol("WM_DELETE_WINDOW", self.on_login_close)
+            finally:
+                self._logging_off = False
+
+        except Exception as e:
+            self.logger.exception("Erro durante logoff: %s", e)
+            try:
+                self._setup_login_window()
+                self.show_login_screen()
+            except Exception:
+                pass
 
     def check_permission(self, permission: str, show_message: bool = True) -> bool:
         """Verifica permissão e mostra mensagem se necessário"""
