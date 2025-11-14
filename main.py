@@ -5099,15 +5099,20 @@ class GerenciadorFirebirdApp(tk.Tk):
         """Dialog para criar novo usuário"""
         dialog = tk.Toplevel(parent_win)
         dialog.title("Novo Usuário")
-        dialog.geometry("500x550")
+        dialog.geometry("500x600")
         dialog.resizable(False, False)
         dialog.transient(parent_win)
         dialog.grab_set()
+
+        # Ícone
+        icon_path = BASE_DIR / "images" / "icon.ico"
+        if icon_path.exists():
+            dialog.iconbitmap(str(icon_path))
         
         # Centraliza
         parent_win.update_idletasks()
         x = parent_win.winfo_x() + (parent_win.winfo_width() // 2) - 250
-        y = parent_win.winfo_y() + (parent_win.winfo_height() // 2) - 275
+        y = parent_win.winfo_y() + (parent_win.winfo_height() // 2) - 300
         dialog.geometry(f"+{x}+{y}")
         
         # Frame principal
@@ -5236,15 +5241,20 @@ class GerenciadorFirebirdApp(tk.Tk):
         
         dialog = tk.Toplevel(parent_win)
         dialog.title(f"Editar Usuário - {username}")
-        dialog.geometry("500x500")
+        dialog.geometry("500x600")
         dialog.resizable(False, False)
         dialog.transient(parent_win)
         dialog.grab_set()
+
+        # Ícone
+        icon_path = BASE_DIR / "images" / "icon.ico"
+        if icon_path.exists():
+            dialog.iconbitmap(str(icon_path))
         
         # Centraliza
         parent_win.update_idletasks()
         x = parent_win.winfo_x() + (parent_win.winfo_width() // 2) - 250
-        y = parent_win.winfo_y() + (parent_win.winfo_height() // 2) - 250
+        y = parent_win.winfo_y() + (parent_win.winfo_height() // 2) - 300
         dialog.geometry(f"+{x}+{y}")
         
         # Frame principal
@@ -5420,15 +5430,20 @@ class GerenciadorFirebirdApp(tk.Tk):
         """Permite ao usuário atual alterar sua própria senha"""
         dialog = tk.Toplevel(self)
         dialog.title("Alterar Minha Senha")
-        dialog.geometry("400x300")
+        dialog.geometry("400x400")
         dialog.resizable(False, False)
         dialog.transient(self)
         dialog.grab_set()
+
+        # Ícone
+        icon_path = BASE_DIR / "images" / "icon.ico"
+        if icon_path.exists():
+            dialog.iconbitmap(str(icon_path))
         
         # Centraliza
         self.update_idletasks()
         x = self.winfo_x() + (self.winfo_width() // 2) - 200
-        y = self.winfo_y() + (self.winfo_height() // 2) - 150
+        y = self.winfo_y() + (self.winfo_height() // 2) - 200
         dialog.geometry(f"+{x}+{y}")
         
         # Frame principal
