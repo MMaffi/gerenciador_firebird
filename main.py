@@ -608,6 +608,9 @@ class GerenciadorFirebirdApp(tk.Tk):
         self.user_manager = UserManager(CONFIG_PATH)
         self.current_user = None
         
+        # === NOVO: Configura a janela como tela de login inicialmente ===
+        self._setup_login_window()
+        
         # Resto do código de inicialização...
         self.dev_buffer = ""
         self.dev_mode = False
@@ -632,7 +635,8 @@ class GerenciadorFirebirdApp(tk.Tk):
                     auto_password = simple_decrypt(auto_password_encrypted)
                     if self.user_manager.authenticate(auto_user, auto_password):
                         self.current_user = self.user_manager.current_user
-                        self._continue_initialization()
+                        # === NOVO: Destroi a tela de login e cria a principal ===
+                        self._destroy_login_and_setup_main()
                         return
                 except Exception as e:
                     self.logger.error(f"Erro no login automático: {e}")
@@ -640,32 +644,69 @@ class GerenciadorFirebirdApp(tk.Tk):
         # Se não fez login automático, mostra tela de login
         self.show_login_screen()
 
-    def show_login_screen(self):
-        """Exibe tela de login"""
-        login_win = tk.Toplevel(self)
-        login_win.title("Login - Gerenciador Firebird")
-        login_win.geometry("400x450")
-        login_win.resizable(False, False)
+    def _setup_login_window(self):
+        """Configura a janela principal como tela de login"""
+        self.title("Login - Gerenciador Firebird")
+        self.geometry("400x450")  # Tamanho fixo para login
+        self.resizable(False, False)  # Não redimensionável durante login
         
-        # Centraliza
-        login_win.update_idletasks()
-        width = login_win.winfo_width()
-        height = login_win.winfo_height()
-        x = (login_win.winfo_screenwidth() // 2) - (width // 2)
-        y = (login_win.winfo_screenheight() // 2) - (height // 2)
-        login_win.geometry(f"{width}x{height}+{x}+{y}")
+        # Centraliza na tela
+        self.update_idletasks()
+        width = 400  # Largura fixa
+        height = 450  # Altura fixa
+        x = (self.winfo_screenwidth() // 2) - (width // 2)
+        y = (self.winfo_screenheight() // 2) - (height // 2)
+        self.geometry(f"{width}x{height}+{x}+{y}")
         
         # Ícone
         icon_path = BASE_DIR / "images" / "icon.ico"
         if icon_path.exists():
-            login_win.iconbitmap(str(icon_path))
+            self.iconbitmap(str(icon_path))
         
-        login_win.transient(self)
-        login_win.grab_set()
-        login_win.focus_force()
+        # Remove o comportamento padrão de fechar
+        self.protocol("WM_DELETE_WINDOW", self.quit_application)
+
+    def _destroy_login_and_setup_main(self):
+        """Destroi a tela de login e configura a janela principal"""
+        # Destroi todos os widgets da tela de login
+        for widget in self.winfo_children():
+            widget.destroy()
+        
+        # Reconfigura a janela para o sistema principal
+        self._setup_main_window()
+        
+        # === CORREÇÃO: Força o redimensionamento ===
+        self.update_idletasks()
+        
+        # Continua a inicialização do sistema
+        self._continue_initialization()
+
+    def _setup_main_window(self):
+        """Configura a janela principal do sistema"""
+        self.title("Gerenciador Firebird")
+        self.geometry("900x750+100+50")
+        self.minsize(800, 700)
+        self.configure(bg="#f5f5f5")
+        
+        # === CORREÇÃO: Permitir redimensionamento ===
+        self.resizable(True, True)  # Permite redimensionar largura e altura
+        
+        # Ícone
+        icon_path = BASE_DIR / "images" / "icon.ico"
+        if icon_path.exists():
+            self.iconbitmap(str(icon_path))
+        
+        # Configura fechamento para minimizar para bandeja
+        self.protocol("WM_DELETE_WINDOW", self.on_close)
+
+    def show_login_screen(self):
+        """Exibe tela de login na janela principal"""
+        # Limpa qualquer widget existente
+        for widget in self.winfo_children():
+            widget.destroy()
         
         # Frame principal
-        main_frame = ttk.Frame(login_win, padding=30)
+        main_frame = ttk.Frame(self, padding=30)
         main_frame.pack(fill="both", expand=True)
         
         # Título
@@ -736,10 +777,9 @@ class GerenciadorFirebirdApp(tk.Tk):
                 
                 save_config(self.conf)
                 
-                login_win.destroy()
+                # Destroi a tela de login e cria a principal
+                self._destroy_login_and_setup_main()
                 
-                # Carrega configurações e continua inicialização
-                self._continue_initialization()
             else:
                 login_status.config(text="Usuário ou senha inválidos")
                 password_entry.delete(0, tk.END)
@@ -758,7 +798,7 @@ class GerenciadorFirebirdApp(tk.Tk):
         ttk.Button(
             btn_frame,
             text="❌ Sair",
-            command=lambda: [login_win.destroy(), sys.exit(0)],
+            command=self.quit_application,
             cursor="hand2"
         ).pack(side="right")
         
@@ -772,9 +812,6 @@ class GerenciadorFirebirdApp(tk.Tk):
             password_entry.focus()
         else:
             username_entry.focus()
-        
-        # Espera o login ser feito
-        self.wait_window(login_win)
 
     def _continue_initialization(self):
         """Continua a inicialização após login bem-sucedido"""
@@ -832,7 +869,7 @@ class GerenciadorFirebirdApp(tk.Tk):
                             users_btn.pack(side="left", padx=2)
 
     def logoff(self):
-        """Faz logoff do usuário atual"""
+        """Faz logoff do usuário atual e volta para tela de login"""
         if messagebox.askyesno("Confirmar Logoff", "Deseja realmente sair da aplicação?"):
             # Salva o último usuário antes de fazer logoff
             if self.current_user:
@@ -847,13 +884,17 @@ class GerenciadorFirebirdApp(tk.Tk):
             # Para o agendador
             self.stop_scheduler()
             
-            # Fecha a aplicação
-            self.quit()
-            self.destroy()
+            # Limpa a interface atual
+            for widget in self.winfo_children():
+                widget.destroy()
             
-            # Reinicia a aplicação para voltar à tela de login
-            python = sys.executable
-            os.execl(python, python, *sys.argv)
+            # Reseta o usuário atual
+            self.current_user = None
+            self.user_manager.current_user = None
+            
+            # Volta para a tela de login
+            self._setup_login_window()
+            self.show_login_screen()
 
     def check_permission(self, permission: str, show_message: bool = True) -> bool:
         """Verifica permissão e mostra mensagem se necessário"""
