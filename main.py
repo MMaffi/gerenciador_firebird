@@ -103,10 +103,10 @@ USER_PERMISSIONS = {
 
 DEFAULT_USERS = {
     "admin": {
-        "password": "admin123",
+        "password": "admin",
         "role": "admin",
         "full_name": "Administrador Principal",
-        "email": "admin@empresa.com",
+        "email": "admin@admin.com",
         "created_at": None,
         "last_login": None,
         "active": True
