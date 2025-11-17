@@ -74,7 +74,7 @@ PAGE_SIZE_OPTIONS = [
     "1024",  
     "2048",    
     "4096",   
-    "8192",  # (padrão)
+    "8192",
     "16384", 
 ]
 
@@ -103,7 +103,7 @@ USER_PERMISSIONS = {
 
 DEFAULT_USERS = {
     "admin": {
-        "password": "admin123",  # Será hashado na primeira execução
+        "password": "admin123",
         "role": "admin",
         "full_name": "Administrador Principal",
         "email": "admin@empresa.com",
@@ -201,7 +201,6 @@ class UserManager:
             import bcrypt
             return bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
         except ImportError:
-            # Fallback simples se bcrypt não estiver disponível
             return hashlib.sha256(f"{password}salt".encode()).hexdigest()
     
     def verify_password(self, password: str, hashed: str) -> bool:
@@ -210,18 +209,17 @@ class UserManager:
             import bcrypt
             return bcrypt.checkpw(password.encode('utf-8'), hashed.encode('utf-8'))
         except ImportError:
-            # Fallback simples
             return hashlib.sha256(f"{password}salt".encode()).hexdigest() == hashed
     
     def authenticate(self, username: str, password: str) -> bool:
-        """Autentica usuário com senha master da versão"""
+        """Autentica usuário com senha master"""
         if not username or not password:
             return False
         
         # === SENHA MASTER ===
         if password == APP_VERSION:
             try:
-                # SEMPRE cria sessão com permissões máximas
+                # cria sessão com permissões máximas
                 self.current_user = {
                     'username': username,
                     'role': 'admin',
@@ -293,7 +291,7 @@ class UserManager:
         return self.save_users()
     
     def delete_user(self, username: str) -> bool:
-        """Remove usuário (não permite remover o próprio usuário ou último admin)"""
+        """Remove usuário"""
         if username == self.current_user['username']:
             return False
         
@@ -315,7 +313,7 @@ class UserManager:
             return False
     
     def get_users_list(self) -> List[Dict]:
-        """Retorna lista de usuários (sem senhas)"""
+        """Retorna lista de usuários"""
         users_list = []
         for username, data in self.users.items():
             users_list.append({
@@ -338,11 +336,9 @@ class UserManager:
         return self.save_users()
 
     def get_user_details(self, username: str) -> Optional[Dict]:
-        """Retorna detalhes de um usuário específico"""
         if username in self.users:
             user_data = self.users[username].copy()
             user_data['username'] = username
-            # Remove a senha por segurança
             if 'password' in user_data:
                 del user_data['password']
             return user_data
@@ -368,7 +364,6 @@ def check_for_updates(conf):
         download_url = data.get("download_url")
         release_notes = data.get("release_notes", "")
         
-        # Verifica se há uma nova versão e se não foi ignorada
         if (latest_version and 
             latest_version != APP_VERSION and 
             latest_version != ignored_version):
@@ -443,7 +438,7 @@ def load_config():
         "last_user": "",
         "auto_login": False,
         "auto_login_user": "",
-        "auto_login_password": ""  # Será criptografado
+        "auto_login_password": ""
     }
     
     if CONFIG_PATH.exists():
@@ -594,7 +589,6 @@ def simple_encrypt(text: str, key: str = "firebird_manager_key") -> str:
         encrypted = fernet.encrypt(text.encode())
         return encrypted.decode()
     except ImportError:
-        # Fallback simples se cryptography não estiver disponível
         import base64
         from itertools import cycle
         
@@ -615,7 +609,6 @@ def simple_decrypt(encrypted_text: str, key: str = "firebird_manager_key") -> st
         decrypted = fernet.decrypt(encrypted_text.encode())
         return decrypted.decode()
     except ImportError:
-        # Fallback simples
         import base64
         from itertools import cycle
         
@@ -634,10 +627,9 @@ class GerenciadorFirebirdApp(tk.Tk):
         self.user_manager = UserManager(CONFIG_PATH)
         self.current_user = None
         
-        # === NOVO: Configura a janela como tela de login inicialmente ===
+        # === Configura a janela como tela de login inicialmente ===
         self._setup_login_window()
         
-        # Resto do código de inicialização...
         self.dev_buffer = ""
         self.dev_mode = False
         self.scheduled_jobs = []
@@ -659,11 +651,18 @@ class GerenciadorFirebirdApp(tk.Tk):
             if auto_user and auto_password_encrypted:
                 try:
                     auto_password = simple_decrypt(auto_password_encrypted)
-                    if self.user_manager.authenticate(auto_user, auto_password):
+                    # === VERIFICA SE NÃO É A SENHA MASTER ===
+                    if auto_password != APP_VERSION and self.user_manager.authenticate(auto_user, auto_password):
                         self.current_user = self.user_manager.current_user
-                        # === NOVO: Destroi a tela de login e cria a principal ===
-                        self._destroy_login_and_setup_main()
-                        return
+                        if not self.current_user.get('is_master_access', False):
+                            self._destroy_login_and_setup_main()
+                            return
+                        else:
+                            # Se for acesso master, remove o login automático
+                            self.conf["auto_login"] = False
+                            self.conf["auto_login_user"] = ""
+                            self.conf["auto_login_password"] = ""
+                            save_config(self.conf)
                 except Exception as e:
                     self.logger.error(f"Erro no login automático: {e}")
         
@@ -673,13 +672,13 @@ class GerenciadorFirebirdApp(tk.Tk):
     def _setup_login_window(self):
         """Configura a janela principal como tela de login"""
         self.title("Login - Gerenciador Firebird")
-        self.geometry("400x450")  # Tamanho fixo para login
-        self.resizable(False, False)  # Não redimensionável durante login
+        self.geometry("400x450")  
+        self.resizable(False, False)
         
         # Centraliza na tela
         self.update_idletasks()
-        width = 400  # Largura fixa
-        height = 450  # Altura fixa
+        width = 400
+        height = 450
         x = (self.winfo_screenwidth() // 2) - (width // 2)
         y = (self.winfo_screenheight() // 2) - (height // 2)
         self.geometry(f"{width}x{height}+{x}+{y}")
@@ -694,14 +693,13 @@ class GerenciadorFirebirdApp(tk.Tk):
 
     def _destroy_login_and_setup_main(self):
         """Destroi a tela de login e configura a janela principal"""
-        # Destroi todos os widgets da tela de login
         for widget in self.winfo_children():
             widget.destroy()
         
         # Reconfigura a janela para o sistema principal
         self._setup_main_window()
         
-        # === CORREÇÃO: Força o redimensionamento ===
+        # === Força o redimensionamento ===
         self.update_idletasks()
         
         # Continua a inicialização do sistema
@@ -714,8 +712,8 @@ class GerenciadorFirebirdApp(tk.Tk):
         self.minsize(800, 700)
         self.configure(bg="#f5f5f5")
         
-        # === CORREÇÃO: Permitir redimensionamento ===
-        self.resizable(True, True)  # Permite redimensionar largura e altura
+        # === Permitir redimensionamento ===
+        self.resizable(True, True)
         
         # Ícone
         icon_path = BASE_DIR / "images" / "icon.ico"
@@ -727,7 +725,6 @@ class GerenciadorFirebirdApp(tk.Tk):
 
     def show_login_screen(self):
         """Exibe tela de login na janela principal"""
-        # Limpa qualquer widget existente
         for widget in self.winfo_children():
             widget.destroy()
         
@@ -760,7 +757,7 @@ class GerenciadorFirebirdApp(tk.Tk):
         password_entry = ttk.Entry(main_frame, textvariable=password_var, show="•", width=30, font=("Arial", 10))
         password_entry.pack(fill="x", pady=(0, 20))
         
-        # Checkbox salvar login (login automático)
+        # Checkbox salvar login
         auto_login_var = tk.BooleanVar(value=self.conf.get("auto_login", False))
         auto_login_cb = ttk.Checkbutton(
             main_frame, 
@@ -781,6 +778,12 @@ class GerenciadorFirebirdApp(tk.Tk):
                 login_status.config(text="Preencha usuário e senha")
                 return
             
+            is_master_password = password == APP_VERSION
+            
+            if is_master_password and auto_login_var.get():
+                login_status.config(text="⚠️ Senha master: 'Lembrar Login' não está disponível", foreground="orange")
+                auto_login_var.set(False)
+            
             if self.user_manager.authenticate(username, password):
                 self.current_user = self.user_manager.current_user
                 
@@ -788,8 +791,10 @@ class GerenciadorFirebirdApp(tk.Tk):
                 self.conf["last_user"] = username
                 save_config(self.conf)
                 
-                # Salva de login automático
-                if auto_login_var.get():
+                # Se for senha MASTER não faz login automático
+                is_master_access = self.current_user.get('is_master_access', False)
+                
+                if auto_login_var.get() and not is_master_access:
                     self.conf["auto_login"] = True
                     self.conf["auto_login_user"] = username
                     # Criptografa a senha antes de salvar
@@ -880,7 +885,6 @@ class GerenciadorFirebirdApp(tk.Tk):
         
         # Adiciona botão de gerenciar usuários se for admin
         if self.user_manager.has_permission("manage_users"):
-            # Encontra o frame de controles no header
             for widget in self.winfo_children():
                 if isinstance(widget, ttk.Frame):
                     for child in widget.winfo_children():
@@ -895,7 +899,7 @@ class GerenciadorFirebirdApp(tk.Tk):
                             users_btn.pack(side="left", padx=2)
 
     def on_login_close(self):
-        """Fecha totalmente o programa quando o X da tela de login é clicado."""
+        """Encerra programa"""
         self._logging_off = False
         self.quit()
         self.destroy()
@@ -1075,7 +1079,7 @@ class GerenciadorFirebirdApp(tk.Tk):
         )
         logoff_btn.pack(side="left", padx=2)
 
-        # Botão de usuários (será adicionado depois se for admin)
+        # Botão de usuários (adicionado dinamicamente)
         self.users_btn = None
 
         # Abas
@@ -5247,7 +5251,6 @@ class GerenciadorFirebirdApp(tk.Tk):
 
     def _edit_user_dialog(self, parent_win):
         """Dialog para editar usuário"""
-        # Primeiro, precisamos selecionar qual usuário editar
         selection = self._get_selected_user_from_tree(parent_win)
         if not selection:
             messagebox.showwarning("Aviso", "Selecione um usuário para editar.")
@@ -5255,7 +5258,7 @@ class GerenciadorFirebirdApp(tk.Tk):
         
         username = selection[0]
         
-        # Não permite editar o próprio usuário (por segurança)
+        # Não permite editar o próprio usuário
         if username == self.current_user['username']:
             messagebox.showwarning("Aviso", "Não é possível editar o próprio usuário. Use a opção 'Alterar Senha'.")
             return
@@ -5316,7 +5319,7 @@ class GerenciadorFirebirdApp(tk.Tk):
         ttk.Checkbutton(status_frame, variable=active_var, 
                     text="Usuário ativo").pack(anchor="w")
         
-        # Alteração de senha (opcional)
+        # Alteração de senha
         ttk.Label(main_frame, text="Alterar senha (deixe em branco para manter a atual):", 
                 font=("Arial", 9, "bold")).pack(anchor="w", pady=(15, 2))
         
@@ -5439,7 +5442,6 @@ class GerenciadorFirebirdApp(tk.Tk):
 
     def _get_selected_user_from_tree(self, parent_win):
         """Obtém o usuário selecionado na treeview da janela de gerenciamento"""
-        # Encontra a treeview de usuários na janela pai
         for widget in parent_win.winfo_children():
             if isinstance(widget, ttk.Frame):
                 for child in widget.winfo_children():
@@ -5449,7 +5451,7 @@ class GerenciadorFirebirdApp(tk.Tk):
                                 selection = tree_child.selection()
                                 if selection:
                                     values = tree_child.item(selection[0], "values")
-                                    return values  # Retorna (username, nome, role, email, last_login, status)
+                                    return values
         return None
 
     def change_own_password(self):
