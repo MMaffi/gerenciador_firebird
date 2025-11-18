@@ -1294,7 +1294,7 @@ class GerenciadorFirebirdApp(tk.Tk):
                 self.after_cancel(self.search_job)
             self.search_job = self.after(500, self._refresh_all_processes)
         
-        self.search_var.trace("w", on_search_change)
+        self.search_var.trace_add("write", on_search_change)
         
         # Atalhos de teclado
         self.all_processes_tree.bind("<Delete>", lambda e: self._kill_selected_processes())
@@ -5727,7 +5727,7 @@ class GerenciadorFirebirdApp(tk.Tk):
         def on_firebird_path_change(*args):
             self.after(500, self._update_exe_status)
         
-        firebird_path_var.trace("w", on_firebird_path_change)
+        firebird_path_var.trace_add("write", on_firebird_path_change)
 
     def pick_firebird_folder(self, var):
         """Seleciona pasta do Firebird"""
