@@ -1,5 +1,5 @@
 {
     "latest_version": "2025.11.12.1331",
-    "download_url": "https://github.com/MMaffi/gerenciador_firebird/releases/latest",
+    "download_url": "https://github.com/MMaffi/gerenciador_firebird/releases/latest/download/GerenciadorFirebird_Installer.exe",
     "release_notes": "✓ Novo editor SQL integrado ao aplicativo\n✓ Coreções de funções para desempenho"
 }

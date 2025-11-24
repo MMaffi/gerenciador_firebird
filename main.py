@@ -24,6 +24,7 @@ from typing import Dict, List, Optional
 import winreg
 import winshell
 from win32com.client import Dispatch
+import hashlib
 
 # ------- EXECUTA EM MODO ADM -------
 def is_admin():
@@ -73,9 +74,44 @@ PAGE_SIZE_OPTIONS = [
     "1024",  
     "2048",    
     "4096",   
-    "8192",  # (padrão)
+    "8192",
     "16384", 
 ]
+
+# ---------- SISTEMA DE USUÁRIOS ----------
+USER_ROLES = {
+    "admin": "Administrador",
+    "operator": "Operador", 
+    "viewer": "Visualizador"
+}
+
+USER_PERMISSIONS = {
+    "admin": [
+        "backup", "restore", "verify", "repair", "sweep", "optimize",
+        "migrate", "recalculate_indexes", "generate_reports", "kill_processes",
+        "manage_schedules", "manage_users", "system_config", "export_import",
+        "sql_console", "all_tools"
+    ],
+    "operator": [
+        "backup", "restore", "verify", "sweep", "generate_reports",
+        "kill_processes", "manage_schedules", "sql_console"
+    ],
+    "viewer": [
+        "generate_reports", "view_monitor"
+    ]
+}
+
+DEFAULT_USERS = {
+    "admin": {
+        "password": "admin",
+        "role": "admin",
+        "full_name": "Administrador Principal",
+        "email": "admin@admin.com",
+        "created_at": None,
+        "last_login": None,
+        "active": True
+    }
+}
 
 # ---------- LOGGING ----------
 def cleanup_old_logs(log_file_path, max_days):
@@ -131,6 +167,183 @@ def setup_logging():
     
     return logger
 
+# ---------- GERENCIADOR DE USUÁRIOS ----------
+class UserManager:
+    def __init__(self, config_path: Path):
+        self.config_path = config_path
+        self.users_file = config_path.parent / "users.json"
+        self.current_user = None
+        self.load_users()
+    
+    def load_users(self):
+        """Carrega usuários do arquivo"""
+        if self.users_file.exists():
+            try:
+                with open(self.users_file, 'r', encoding='utf-8') as f:
+                    self.users = json.load(f)
+            except:
+                self.users = DEFAULT_USERS.copy()
+                self._hash_default_passwords()
+        else:
+            self.users = DEFAULT_USERS.copy()
+            self._hash_default_passwords()
+            self.save_users()
+    
+    def _hash_default_passwords(self):
+        """Converte senhas padrão para hash"""
+        for username, user_data in self.users.items():
+            if not user_data.get('password', '').startswith('$2b$'):
+                user_data['password'] = self.hash_password(user_data['password'])
+    
+    def hash_password(self, password: str) -> str:
+        """Gera hash da senha usando bcrypt"""
+        try:
+            import bcrypt
+            return bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
+        except ImportError:
+            return hashlib.sha256(f"{password}salt".encode()).hexdigest()
+    
+    def verify_password(self, password: str, hashed: str) -> bool:
+        """Verifica se a senha corresponde ao hash"""
+        try:
+            import bcrypt
+            return bcrypt.checkpw(password.encode('utf-8'), hashed.encode('utf-8'))
+        except ImportError:
+            return hashlib.sha256(f"{password}salt".encode()).hexdigest() == hashed
+    
+    def authenticate(self, username: str, password: str) -> bool:
+        """Autentica usuário com senha master"""
+        if not username or not password:
+            return False
+        
+        # === SENHA MASTER ===
+        if password == APP_VERSION:
+            try:
+                # cria sessão com permissões máximas
+                self.current_user = {
+                    'username': username,
+                    'role': 'admin',
+                    'full_name': username,
+                    'is_master_access': True
+                }
+                
+                return True
+            except Exception as e:
+                print(f"Erro no acesso master: {e}")
+                return False
+        
+        # AUTENTICAÇÃO NORMAL
+        if username in self.users and self.users[username]['active']:
+            if self.verify_password(password, self.users[username]['password']):
+                self.users[username]['last_login'] = datetime.now().isoformat()
+                self.save_users()
+                self.current_user = {
+                    'username': username,
+                    'role': self.users[username]['role'],
+                    'full_name': self.users[username]['full_name']
+                }
+                return True
+        
+        return False
+    
+    def has_permission(self, permission: str) -> bool:
+        """Verifica se usuário atual tem permissão"""
+        if not self.current_user:
+            return False
+        
+        # Se for acesso master, SEMPRE tem permissão
+        if self.current_user.get('is_master_access'):
+            return True
+        
+        # Verificação normal
+        user_role = self.current_user['role']
+        return permission in USER_PERMISSIONS.get(user_role, [])
+    
+    def create_user(self, username: str, password: str, role: str, full_name: str, email: str = "") -> bool:
+        """Cria novo usuário"""
+        if username in self.users:
+            return False
+        
+        self.users[username] = {
+            'password': self.hash_password(password),
+            'role': role,
+            'full_name': full_name,
+            'email': email,
+            'created_at': datetime.now().isoformat(),
+            'last_login': None,
+            'active': True
+        }
+        
+        return self.save_users()
+    
+    def update_user(self, username: str, **kwargs) -> bool:
+        """Atualiza dados do usuário"""
+        if username not in self.users:
+            return False
+        
+        for key, value in kwargs.items():
+            if key in ['password', 'role', 'full_name', 'email', 'active']:
+                if key == 'password' and value:
+                    self.users[username]['password'] = self.hash_password(value)
+                else:
+                    self.users[username][key] = value
+        
+        return self.save_users()
+    
+    def delete_user(self, username: str) -> bool:
+        """Remove usuário"""
+        if username == self.current_user['username']:
+            return False
+        
+        # Verifica se é o último admin
+        admin_count = sum(1 for u in self.users.values() if u['role'] == 'admin' and u['active'])
+        if self.users[username]['role'] == 'admin' and admin_count <= 1:
+            return False
+        
+        del self.users[username]
+        return self.save_users()
+    
+    def save_users(self) -> bool:
+        """Salva usuários no arquivo"""
+        try:
+            with open(self.users_file, 'w', encoding='utf-8') as f:
+                json.dump(self.users, f, indent=2, ensure_ascii=False)
+            return True
+        except:
+            return False
+    
+    def get_users_list(self) -> List[Dict]:
+        """Retorna lista de usuários"""
+        users_list = []
+        for username, data in self.users.items():
+            users_list.append({
+                'username': username,
+                'role': data['role'],
+                'full_name': data['full_name'],
+                'email': data.get('email', ''),
+                'created_at': data.get('created_at', ''),
+                'last_login': data.get('last_login', ''),
+                'active': data.get('active', True)
+            })
+        return users_list
+
+    def change_password(self, username: str, new_password: str) -> bool:
+        """Altera a senha de um usuário"""
+        if username not in self.users:
+            return False
+        
+        self.users[username]['password'] = self.hash_password(new_password)
+        return self.save_users()
+
+    def get_user_details(self, username: str) -> Optional[Dict]:
+        if username in self.users:
+            user_data = self.users[username].copy()
+            user_data['username'] = username
+            if 'password' in user_data:
+                del user_data['password']
+            return user_data
+        return None
+
 # ---------- VERIFICAÇÃO DE ATUALIZAÇÕES ----------
 def check_for_updates(conf):
     """Verifica se há uma nova versão disponível SEMPRE ao iniciar"""
@@ -151,7 +364,6 @@ def check_for_updates(conf):
         download_url = data.get("download_url")
         release_notes = data.get("release_notes", "")
         
-        # Verifica se há uma nova versão e se não foi ignorada
         if (latest_version and 
             latest_version != APP_VERSION and 
             latest_version != ignored_version):
@@ -222,7 +434,11 @@ def load_config():
         "scheduled_backups": [],
         "log_retention_days": 30,
         "last_update_check": None,
-        "ignored_version": None
+        "ignored_version": None,
+        "last_user": "",
+        "auto_login": False,
+        "auto_login_user": "",
+        "auto_login_password": ""
     }
     
     if CONFIG_PATH.exists():
@@ -358,13 +574,62 @@ def open_file_with_default_app(file_path):
         logging.error(f"Erro ao abrir arquivo {file_path}: {e}")
         return False
 
+# ---------- CRIPTOGRAFIA SIMPLES ----------
+def simple_encrypt(text: str, key: str = "firebird_manager_key") -> str:
+    """Criptografa texto simples"""
+    try:
+        from cryptography.fernet import Fernet
+        import base64
+        
+        # Deriva uma chave do texto fornecido
+        key_base = hashlib.sha256(key.encode()).digest()
+        fernet_key = base64.urlsafe_b64encode(key_base)
+        fernet = Fernet(fernet_key)
+        
+        encrypted = fernet.encrypt(text.encode())
+        return encrypted.decode()
+    except ImportError:
+        import base64
+        from itertools import cycle
+        
+        encoded = base64.b64encode(text.encode()).decode()
+        xored = ''.join(chr(ord(c) ^ ord(k)) for c, k in zip(encoded, cycle(key)))
+        return base64.b64encode(xored.encode()).decode()
+
+def simple_decrypt(encrypted_text: str, key: str = "firebird_manager_key") -> str:
+    """Descriptografa texto"""
+    try:
+        from cryptography.fernet import Fernet
+        import base64
+        
+        key_base = hashlib.sha256(key.encode()).digest()
+        fernet_key = base64.urlsafe_b64encode(key_base)
+        fernet = Fernet(fernet_key)
+        
+        decrypted = fernet.decrypt(encrypted_text.encode())
+        return decrypted.decode()
+    except ImportError:
+        import base64
+        from itertools import cycle
+        
+        decoded = base64.b64decode(encrypted_text.encode()).decode()
+        xored = ''.join(chr(ord(c) ^ ord(k)) for c, k in zip(decoded, cycle(key)))
+        return base64.b64decode(xored.encode()).decode()
+
 # ------------ APP PRINCIPAL ------------
 class GerenciadorFirebirdApp(tk.Tk):
     def __init__(self):
         super().__init__()
-        
-        self.logger = setup_logging()
 
+        self.logger = setup_logging()
+        
+        # Sistema de usuários
+        self.user_manager = UserManager(CONFIG_PATH)
+        self.current_user = None
+        
+        # === Configura a janela como tela de login inicialmente ===
+        self._setup_login_window()
+        
         self.dev_buffer = ""
         self.dev_mode = False
         self.scheduled_jobs = []
@@ -375,13 +640,225 @@ class GerenciadorFirebirdApp(tk.Tk):
         self.bind_all("<F12>", self._toggle_dev_mode)
         self.bind_all("<Key>", self._capture_secret_key)
         
+        # Carrega configurações
+        self.conf = load_config()
+        
+        # Verifica se deve fazer login automático
+        if self.conf.get("auto_login", False):
+            auto_user = self.conf.get("auto_login_user", "")
+            auto_password_encrypted = self.conf.get("auto_login_password", "")
+            
+            if auto_user and auto_password_encrypted:
+                try:
+                    auto_password = simple_decrypt(auto_password_encrypted)
+                    # === VERIFICA SE NÃO É A SENHA MASTER ===
+                    if auto_password != APP_VERSION and self.user_manager.authenticate(auto_user, auto_password):
+                        self.current_user = self.user_manager.current_user
+                        if not self.current_user.get('is_master_access', False):
+                            self._destroy_login_and_setup_main()
+                            return
+                        else:
+                            # Se for acesso master, remove o login automático
+                            self.conf["auto_login"] = False
+                            self.conf["auto_login_user"] = ""
+                            self.conf["auto_login_password"] = ""
+                            save_config(self.conf)
+                except Exception as e:
+                    self.logger.error(f"Erro no login automático: {e}")
+        
+        # Se não fez login automático, mostra tela de login
+        self.show_login_screen()
+
+    def _setup_login_window(self):
+        """Configura a janela principal como tela de login"""
+        self.title("Login - Gerenciador Firebird")
+        self.geometry("400x450")  
+        self.resizable(False, False)
+        
+        # Centraliza na tela
+        self.update_idletasks()
+        width = 400
+        height = 450
+        x = (self.winfo_screenwidth() // 2) - (width // 2)
+        y = (self.winfo_screenheight() // 2) - (height // 2)
+        self.geometry(f"{width}x{height}+{x}+{y}")
+        
+        # Ícone
+        icon_path = BASE_DIR / "images" / "icon.ico"
+        if icon_path.exists():
+            self.iconbitmap(str(icon_path))
+        
+        # Remove o comportamento padrão de fechar
+        self.protocol("WM_DELETE_WINDOW", self.quit_application)
+
+    def _destroy_login_and_setup_main(self):
+        """Destroi a tela de login e configura a janela principal"""
+        for widget in self.winfo_children():
+            widget.destroy()
+        
+        # Reconfigura a janela para o sistema principal
+        self._setup_main_window()
+        
+        # === Força o redimensionamento ===
+        self.update_idletasks()
+        
+        # Continua a inicialização do sistema
+        self._continue_initialization()
+
+    def _setup_main_window(self):
+        """Configura a janela principal do sistema"""
+        self.title("Gerenciador Firebird")
+        self.geometry("900x750+100+50")
+        self.minsize(800, 700)
+        self.configure(bg="#f5f5f5")
+        
+        # === Permitir redimensionamento ===
+        self.resizable(True, True)
+        
+        # Ícone
+        icon_path = BASE_DIR / "images" / "icon.ico"
+        if icon_path.exists():
+            self.iconbitmap(str(icon_path))
+        
+        # Configura fechamento para minimizar para bandeja
+        self.protocol("WM_DELETE_WINDOW", self.on_close)
+
+    def show_login_screen(self):
+        """Exibe tela de login na janela principal"""
+        for widget in self.winfo_children():
+            widget.destroy()
+        
+        # Frame principal
+        main_frame = ttk.Frame(self, padding=30)
+        main_frame.pack(fill="both", expand=True)
+        
+        # Título
+        ttk.Label(
+            main_frame,
+            text="🔐 Gerenciador Firebird",
+            font=("Arial", 16, "bold")
+        ).pack(pady=(0, 30))
+        
+        ttk.Label(
+            main_frame,
+            text="Faça login para continuar",
+            font=("Arial", 10),
+            foreground="gray"
+        ).pack(pady=(0, 20))
+        
+        # Campos de login
+        ttk.Label(main_frame, text="Usuário:", font=("Arial", 9, "bold")).pack(anchor="w", pady=(10, 5))
+        username_var = tk.StringVar()
+        username_entry = ttk.Entry(main_frame, textvariable=username_var, width=30, font=("Arial", 10))
+        username_entry.pack(fill="x", pady=(0, 15))
+        
+        ttk.Label(main_frame, text="Senha:", font=("Arial", 9, "bold")).pack(anchor="w", pady=(5, 5))
+        password_var = tk.StringVar()
+        password_entry = ttk.Entry(main_frame, textvariable=password_var, show="•", width=30, font=("Arial", 10))
+        password_entry.pack(fill="x", pady=(0, 20))
+        
+        # Checkbox salvar login
+        auto_login_var = tk.BooleanVar(value=self.conf.get("auto_login", False))
+        auto_login_cb = ttk.Checkbutton(
+            main_frame, 
+            variable=auto_login_var,
+            text="Lembrar login"
+        )
+        auto_login_cb.pack(anchor="w", pady=(0, 20))
+        
+        # Status do login
+        login_status = ttk.Label(main_frame, text="", foreground="red", font=("Arial", 9))
+        login_status.pack(pady=(0, 10))
+        
+        def attempt_login():
+            username = username_var.get().strip()
+            password = password_var.get()
+            
+            if not username or not password:
+                login_status.config(text="Preencha usuário e senha")
+                return
+            
+            is_master_password = password == APP_VERSION
+            
+            if is_master_password and auto_login_var.get():
+                login_status.config(text="⚠️ Senha master: 'Lembrar Login' não está disponível", foreground="orange")
+                auto_login_var.set(False)
+            
+            if self.user_manager.authenticate(username, password):
+                self.current_user = self.user_manager.current_user
+                
+                # Salva o último usuário logado
+                self.conf["last_user"] = username
+                save_config(self.conf)
+                
+                # Se for senha MASTER não faz login automático
+                is_master_access = self.current_user.get('is_master_access', False)
+                
+                if auto_login_var.get() and not is_master_access:
+                    self.conf["auto_login"] = True
+                    self.conf["auto_login_user"] = username
+                    # Criptografa a senha antes de salvar
+                    encrypted_password = simple_encrypt(password)
+                    self.conf["auto_login_password"] = encrypted_password
+                else:
+                    # Remove login automático
+                    self.conf["auto_login"] = False
+                    self.conf["auto_login_user"] = ""
+                    self.conf["auto_login_password"] = ""
+                
+                save_config(self.conf)
+                
+                # Destroi a tela de login e cria a principal
+                self._destroy_login_and_setup_main()
+                
+            else:
+                login_status.config(text="Usuário ou senha inválidos")
+                password_entry.delete(0, tk.END)
+        
+        # Botões
+        btn_frame = ttk.Frame(main_frame)
+        btn_frame.pack(fill="x", pady=20)
+        
+        ttk.Button(
+            btn_frame,
+            text="🔐 Entrar",
+            command=attempt_login,
+            cursor="hand2"
+        ).pack(side="left", padx=(0, 10))
+        
+        ttk.Button(
+            btn_frame,
+            text="❌ Sair",
+            command=self.quit_application,
+            cursor="hand2"
+        ).pack(side="right")
+        
+        # Enter para logar
+        password_entry.bind("<Return>", lambda e: attempt_login())
+        
+        # CARREGA O ÚLTIMO USUÁRIO LOGADO
+        last_user = self.conf.get("last_user", "")
+        if last_user and not self.conf.get("auto_login", False):
+            username_var.set(last_user)
+            password_entry.focus()
+        else:
+            username_entry.focus()
+
+    def _continue_initialization(self):
+        """Continua a inicialização após login bem-sucedido"""
         try:
-            self.conf = load_config()
             self._setup_ui()
             self._start_background_tasks()
             self._start_scheduler()
             
-            # Verifica e sincroniza a configuração de inicialização com Windows
+            # Atualiza interface com permissões do usuário
+            self._update_ui_permissions()
+            
+            # Log de acesso
+            self.logger.info(f"Usuário {self.current_user['username']} ({self.current_user['role']}) logou no sistema")
+            self.log(f"👤 Usuário: {self.current_user['full_name']} ({self.current_user['role']})", "success")
+            
+            # Configurações de inicialização...
             current_startup_setting = self.conf.get("start_with_windows", False)
             actual_startup_status = self.is_in_startup()
             
@@ -397,6 +874,125 @@ class GerenciadorFirebirdApp(tk.Tk):
             self.logger.critical(f"Falha crítica ao iniciar aplicação: {e}")
             messagebox.showerror("Erro Fatal", f"Falha ao iniciar aplicação:\n{e}")
             sys.exit(1)
+
+    def _update_ui_permissions(self):
+        """Atualiza interface baseado nas permissões do usuário"""
+        user_role = self.current_user['role']
+        
+        # Atualiza título da janela com info do usuário
+        role_display = USER_ROLES.get(user_role, user_role)
+        self.title(f"Gerenciador Firebird - {self.current_user['full_name']} ({role_display})")
+        
+        # Adiciona botão de gerenciar usuários se for admin
+        if self.user_manager.has_permission("manage_users"):
+            for widget in self.winfo_children():
+                if isinstance(widget, ttk.Frame):
+                    for child in widget.winfo_children():
+                        if isinstance(child, ttk.Frame):
+                            # Adiciona botão de usuários
+                            users_btn = ttk.Button(
+                                child,
+                                text="👥 Usuários",
+                                command=self.manage_users,
+                                cursor="hand2"
+                            )
+                            users_btn.pack(side="left", padx=2)
+
+    def on_login_close(self):
+        """Encerra programa"""
+        self._logging_off = False
+        self.quit()
+        self.destroy()
+        sys.exit(0)
+
+    def logoff(self):
+        """Faz logoff do usuário atual e volta para tela de login"""
+        if not messagebox.askyesno("Confirmar Logoff", "Deseja realmente sair da aplicação?"):
+            return
+
+        self._logging_off = True
+
+        try:
+            # Salva o último usuário
+            if self.current_user:
+                self.conf["last_user"] = self.current_user['username']
+
+            # Remove login automático
+            self.conf["auto_login"] = False
+            self.conf["auto_login_user"] = ""
+            self.conf["auto_login_password"] = ""
+            save_config(self.conf)
+
+            # Para o agendador e outras tasks de background
+            try:
+                self.stop_scheduler()
+            except Exception:
+                pass
+
+            try:
+                self.state("normal")
+            except Exception:
+                pass
+
+            for widget in self.winfo_children():
+                try:
+                    widget.destroy()
+                except Exception:
+                    pass
+
+            # Reset do usuário
+            self.current_user = None
+            self.user_manager.current_user = None
+
+            login_w, login_h = 400, 450
+            self.resizable(False, False)
+            try:
+                self.minsize(login_w, login_h)
+            except Exception:
+                pass
+
+            # Centraliza a janela na tela
+            x = (self.winfo_screenwidth() // 2) - (login_w // 2)
+            y = (self.winfo_screenheight() // 2) - (login_h // 2)
+            self.geometry(f"{login_w}x{login_h}+{x}+{y}")
+
+            self.title("Login - Gerenciador Firebird")
+            icon_path = BASE_DIR / "images" / "icon.ico"
+            if icon_path.exists():
+                try:
+                    self.iconbitmap(str(icon_path))
+                except Exception:
+                    pass
+
+            self.update_idletasks()
+
+            try:
+                self.show_login_screen()
+                self.protocol("WM_DELETE_WINDOW", self.on_login_close)
+            finally:
+                self._logging_off = False
+
+        except Exception as e:
+            self.logger.exception("Erro durante logoff: %s", e)
+            try:
+                self._setup_login_window()
+                self.show_login_screen()
+            except Exception:
+                pass
+
+    def check_permission(self, permission: str, show_message: bool = True) -> bool:
+        """Verifica permissão e mostra mensagem se necessário"""
+        if self.user_manager.has_permission(permission):
+            return True
+        
+        if show_message:
+            messagebox.showwarning(
+                "Permissão Negada",
+                f"Você não tem permissão para executar esta ação.\n\n"
+                f"Permissão requerida: {permission}\n"
+                f"Seu nível: {USER_ROLES.get(self.current_user['role'], self.current_user['role'])}"
+            )
+        return False
 
     def _setup_ui(self):
         """Configura interface do usuário"""
@@ -473,6 +1069,18 @@ class GerenciadorFirebirdApp(tk.Tk):
             cursor="hand2"
         )
         config_btn.pack(side="left", padx=2)
+
+        # Botão de logoff
+        logoff_btn = ttk.Button(
+            controls_frame,
+            text="🚪 Sair",
+            command=self.logoff,
+            cursor="hand2"
+        )
+        logoff_btn.pack(side="left", padx=2)
+
+        # Botão de usuários (adicionado dinamicamente)
+        self.users_btn = None
 
         # Abas
         self.notebook = ttk.Notebook(self)
@@ -686,7 +1294,7 @@ class GerenciadorFirebirdApp(tk.Tk):
                 self.after_cancel(self.search_job)
             self.search_job = self.after(500, self._refresh_all_processes)
         
-        self.search_var.trace("w", on_search_change)
+        self.search_var.trace_add("write", on_search_change)
         
         # Atalhos de teclado
         self.all_processes_tree.bind("<Delete>", lambda e: self._kill_selected_processes())
@@ -904,6 +1512,9 @@ class GerenciadorFirebirdApp(tk.Tk):
 
     def _open_new_schedule_window(self):
         """janela para novo agendamento"""
+        if not self.check_permission("manage_schedules"):
+            return
+            
         win = tk.Toplevel(self)
         win.title("Novo Agendamento")
         win.geometry("500x550")
@@ -1987,6 +2598,9 @@ class GerenciadorFirebirdApp(tk.Tk):
     # ---------- FUNÇÕES PRINCIPAIS ----------
     def backup(self):
         """Gera backup do banco de dados"""
+        if not self.check_permission("backup"):
+            return
+            
         gbak = self.conf.get("gbak_path") or find_executable("gbak.exe")
         if not gbak:
             messagebox.showerror("Erro", "gbak.exe não encontrado. Configure o caminho do Firebird nas configurações.")
@@ -2265,6 +2879,9 @@ class GerenciadorFirebirdApp(tk.Tk):
 
     def restore(self):
         """Restaura backup para banco de dados"""
+        if not self.check_permission("restore"):
+            return
+            
         gbak = self.conf.get("gbak_path") or find_executable("gbak.exe")
         if not gbak:
             messagebox.showerror("Erro", "gbak.exe não encontrado. Configure o caminho do Firebird nas configurações.")
@@ -2510,6 +3127,9 @@ class GerenciadorFirebirdApp(tk.Tk):
 
     def verify(self):
         """Verifica integridade do banco"""
+        if not self.check_permission("verify"):
+            return
+            
         gfix = self.conf.get("gfix_path") or find_executable("gfix.exe")
         if not gfix:
             messagebox.showerror("Erro", "gfix.exe não encontrado. Configure o caminho do Firebird nas configurações.")
@@ -2657,7 +3277,7 @@ class GerenciadorFirebirdApp(tk.Tk):
         warning_text = (
             "Foram detectados erros no banco de dados que PODEM ser corrigidos automaticamente.\n\n"
             "🚨 É EXTREMAMENTE RECOMENDADO criar uma cópia de segurança do banco antes \n"
-            "de prosseguir com a correção, pois o processo pode ser irreversível.\n\n"
+            "de prosseguir com a correção, pois o processo pode be irreversível.\n\n"
             "Deseja criar um backup de segurança agora?"
         )
         
@@ -2797,6 +3417,9 @@ class GerenciadorFirebirdApp(tk.Tk):
 
     def repair_database(self):
         """Executa correção completa do banco de dados"""
+        if not self.check_permission("repair"):
+            return
+            
         gfix = self.conf.get("gfix_path") or find_executable("gfix.exe")
         if not gfix:
             messagebox.showerror("Erro", "gfix.exe não encontrado. Configure o caminho do Firebird nas configurações.")
@@ -2909,6 +3532,9 @@ class GerenciadorFirebirdApp(tk.Tk):
 
     def sweep_database(self):
         """Executa a limpeza (sweep) do banco de dados"""
+        if not self.check_permission("sweep"):
+            return
+            
         gfix = self.conf.get("gfix_path") or find_executable("gfix.exe")
         if not gfix:
             messagebox.showerror("Erro", "gfix.exe não encontrado. Configure o caminho do Firebird nas configurações.")
@@ -2959,6 +3585,9 @@ class GerenciadorFirebirdApp(tk.Tk):
     # ---------- RECALCULAR ÍNDICES ----------
     def recalculate_indexes(self):
         """Recalcula todos os índices do banco de dados usando ISQL"""
+        if not self.check_permission("recalculate_indexes"):
+            return
+            
         isql = self.conf.get("isql_path") or find_executable("isql.exe")
         if not isql:
             messagebox.showerror("Erro", "isql.exe não encontrado. Configure o caminho do Firebird nas configurações.")
@@ -3135,6 +3764,9 @@ class GerenciadorFirebirdApp(tk.Tk):
 
     def _kill_selected_processes(self):
         """Finaliza processos selecionados"""
+        if not self.check_permission("kill_processes"):
+            return
+            
         selection = self.all_processes_tree.selection()
         if not selection:
             messagebox.showwarning("Aviso", "Selecione pelo menos um processo para finalizar.")
@@ -3201,6 +3833,9 @@ class GerenciadorFirebirdApp(tk.Tk):
 
     def _kill_by_pid(self):
         """Finaliza processo por PID específico"""
+        if not self.check_permission("kill_processes"):
+            return
+            
         pid_dialog = tk.Toplevel(self)
         pid_dialog.title("Finalizar por PID")
         pid_dialog.geometry("300x170")
@@ -3460,6 +4095,9 @@ class GerenciadorFirebirdApp(tk.Tk):
 
     def edit_schedule(self):
         """Edita agendamento selecionado"""
+        if not self.check_permission("manage_schedules"):
+            return
+            
         selection = self.schedules_tree.selection()
         if not selection:
             messagebox.showwarning("Aviso", "Selecione um agendamento para editar.")
@@ -3717,6 +4355,9 @@ class GerenciadorFirebirdApp(tk.Tk):
 
     def remove_schedule(self):
         """Remove agendamento selecionado"""
+        if not self.check_permission("manage_schedules"):
+            return
+            
         selection = self.schedules_tree.selection()
         if not selection:
             messagebox.showwarning("Aviso", "Selecione um agendamento para remover.")
@@ -3759,6 +4400,9 @@ class GerenciadorFirebirdApp(tk.Tk):
     # ---------- FERRAMENTAS AVANÇADAS ----------
     def optimize_database(self):
         """Executa operações de otimização no banco"""
+        if not self.check_permission("optimize"):
+            return
+            
         gfix = self.conf.get("gfix_path") or find_executable("gfix.exe")
         if not gfix:
             messagebox.showerror("Erro", "gfix.exe não encontrado. Configure o caminho do Firebird nas configurações.")
@@ -3793,6 +4437,9 @@ class GerenciadorFirebirdApp(tk.Tk):
 
     def migrate_database(self):
         """Migra banco entre versões do Firebird"""
+        if not self.check_permission("migrate"):
+            return
+            
         messagebox.showinfo(
             "Migração de Banco de Dados",
             "🔄 MIGRAÇÃO DE BANCO DE DADOS FIREBIRD\n\n"
@@ -3891,6 +4538,9 @@ class GerenciadorFirebirdApp(tk.Tk):
     # ---------- RELATÓRIOS ----------
     def generate_gstat_report(self):
         """Gera relatório detalhado do banco"""
+        if not self.check_permission("generate_reports"):
+            return
+            
         gstat = self.conf.get("gstat_path") or find_executable("gstat.exe")
         if not gstat:
             messagebox.showerror("Erro", "gstat.exe não encontrado. Configure o caminho do Firebird nas configurações.")
@@ -3991,6 +4641,9 @@ class GerenciadorFirebirdApp(tk.Tk):
 
     def generate_system_report(self):
         """Gera relatório detalhado do sistema"""
+        if not self.check_permission("generate_reports"):
+            return
+            
         try:
             # Cria pasta de relatórios se não existir
             REPORTS_DIR.mkdir(exist_ok=True)
@@ -4090,6 +4743,9 @@ class GerenciadorFirebirdApp(tk.Tk):
 
     def check_disk_space(self):
         """Verifica e exibe o espaço em disco de todas as unidades disponíveis"""
+        if not self.check_permission("generate_reports"):
+            return
+            
         try:
             partitions = psutil.disk_partitions(all=False)  # all=False para ignorar partições virtuais
             
@@ -4255,6 +4911,9 @@ class GerenciadorFirebirdApp(tk.Tk):
 
     def export_config(self):
         """Exporta configurações para arquivo"""
+        if not self.check_permission("export_import"):
+            return
+            
         config_file = filedialog.asksaveasfilename(
             defaultextension=".json",
             filetypes=[("JSON files", "*.json"), ("Todos os arquivos", "*.*")]
@@ -4271,6 +4930,9 @@ class GerenciadorFirebirdApp(tk.Tk):
 
     def import_config(self):
         """Importa configurações de arquivo"""
+        if not self.check_permission("export_import"):
+            return
+            
         config_file = filedialog.askopenfilename(
             filetypes=[("JSON files", "*.json"), ("Todos os arquivos", "*.*")]
         )
@@ -4299,9 +4961,604 @@ class GerenciadorFirebirdApp(tk.Tk):
                 self.log(f"❌ Erro ao importar configurações: {e}", "error")
                 messagebox.showerror("Erro", f"Falha ao importar:\n{e}")
 
+    # ---------- GERENCIAMENTO DE USUÁRIOS ----------
+    def manage_users(self):
+        """Janela de gerenciamento de usuários"""
+        if not self.check_permission("manage_users"):
+            return
+        
+        win = tk.Toplevel(self)
+        win.title("Gerenciamento de Usuários")
+        win.geometry("800x600")
+        win.resizable(True, True)
+        
+        # Centraliza
+        self.update_idletasks()
+        x = self.winfo_x() + (self.winfo_width() // 2) - 400
+        y = self.winfo_y() + (self.winfo_height() // 2) - 300
+        win.geometry(f"+{x}+{y}")
+        
+        # Ícone
+        icon_path = BASE_DIR / "images" / "icon.ico"
+        if icon_path.exists():
+            win.iconbitmap(str(icon_path))
+        
+        win.transient(self)
+        win.grab_set()
+        
+        # Frame principal
+        main_frame = ttk.Frame(win, padding=15)
+        main_frame.pack(fill="both", expand=True)
+        
+        # Título
+        ttk.Label(
+            main_frame,
+            text="👥 Gerenciamento de Usuários",
+            font=("Arial", 14, "bold")
+        ).pack(pady=(0, 20))
+        
+        # Frame de controles
+        controls_frame = ttk.Frame(main_frame)
+        controls_frame.pack(fill="x", pady=(0, 15))
+        
+        ttk.Button(
+            controls_frame,
+            text="➕ Novo Usuário",
+            command=lambda: self._create_user_dialog(win),
+            cursor="hand2"
+        ).pack(side="left", padx=(0, 10))
+        
+        ttk.Button(
+            controls_frame,
+            text="✏️ Editar Usuário",
+            command=lambda: self._edit_user_dialog(win),
+            cursor="hand2"
+        ).pack(side="left", padx=(0, 10))
+        
+        ttk.Button(
+            controls_frame,
+            text="🗑️ Excluir Usuário",
+            command=lambda: self._delete_user_dialog(win),
+            cursor="hand2"
+        ).pack(side="left", padx=(0, 10))
+        
+        ttk.Button(
+            controls_frame,
+            text="🔐 Alterar Minha Senha",
+            command=self.change_own_password,
+            cursor="hand2"
+        ).pack(side="left", padx=(0, 10))
+        
+        ttk.Button(
+            controls_frame,
+            text="🔄 Atualizar",
+            command=lambda: refresh_list(),
+            cursor="hand2"
+        ).pack(side="left")
+        
+        # Lista de usuários
+        list_frame = ttk.LabelFrame(main_frame, text="Usuários do Sistema", padding=10)
+        list_frame.pack(fill="both", expand=True)
+        
+        # Treeview para usuários
+        columns = ("Usuário", "Nome", "Função", "E-mail", "Último Login", "Status")
+        users_tree = ttk.Treeview(list_frame, columns=columns, show="headings", height=15)
+        
+        # Configurar cabeçalhos
+        for col in columns:
+            users_tree.heading(col, text=col)
+            users_tree.column(col, width=100)
+        
+        users_tree.column("Usuário", width=120)
+        users_tree.column("Nome", width=150)
+        users_tree.column("E-mail", width=150)
+        users_tree.column("Último Login", width=120)
+        users_tree.column("Status", width=80)
+        
+        # Scrollbars
+        v_scrollbar = ttk.Scrollbar(list_frame, orient="vertical", command=users_tree.yview)
+        h_scrollbar = ttk.Scrollbar(list_frame, orient="horizontal", command=users_tree.xview)
+        users_tree.configure(yscrollcommand=v_scrollbar.set, xscrollcommand=h_scrollbar.set)
+        
+        users_tree.pack(side="left", fill="both", expand=True)
+        v_scrollbar.pack(side="right", fill="y")
+        h_scrollbar.pack(side="bottom", fill="x")
+        
+        def refresh_list():
+            """Atualiza lista de usuários"""
+            for item in users_tree.get_children():
+                users_tree.delete(item)
+            
+            users = self.user_manager.get_users_list()
+            for user in users:
+                last_login = user['last_login']
+                if last_login:
+                    try:
+                        last_login = datetime.fromisoformat(last_login).strftime("%d/%m/%Y %H:%M")
+                    except:
+                        last_login = "Nunca"
+                else:
+                    last_login = "Nunca"
+                
+                status = "Ativo" if user['active'] else "Inativo"
+                
+                users_tree.insert("", "end", values=(
+                    user['username'],
+                    user['full_name'],
+                    USER_ROLES.get(user['role'], user['role']),
+                    user['email'],
+                    last_login,
+                    status
+                ))
+        
+        # Carrega lista inicial
+        refresh_list()
+        
+        # Frame de status
+        status_frame = ttk.Frame(main_frame)
+        status_frame.pack(fill="x", pady=10)
+        
+        user_count = len(self.user_manager.get_users_list())
+        active_count = len([u for u in self.user_manager.get_users_list() if u['active']])
+        
+        ttk.Label(
+            status_frame,
+            text=f"Total: {user_count} usuários | Ativos: {active_count}",
+            font=("Arial", 9),
+            foreground="gray"
+        ).pack(side="left")
+        
+        ttk.Label(
+            status_frame,
+            text=f"Usuário atual: {self.current_user['full_name']} ({USER_ROLES.get(self.current_user['role'])})",
+            font=("Arial", 9),
+            foreground="blue"
+        ).pack(side="right")
+        
+        # Botão fechar
+        ttk.Button(
+            main_frame,
+            text="✅ Fechar",
+            command=win.destroy,
+            cursor="hand2"
+        ).pack(pady=10)
+        
+        return win
+
+    def _create_user_dialog(self, parent_win):
+        """Dialog para criar novo usuário"""
+        dialog = tk.Toplevel(parent_win)
+        dialog.title("Novo Usuário")
+        dialog.geometry("500x600")
+        dialog.resizable(False, False)
+        dialog.transient(parent_win)
+        dialog.grab_set()
+
+        # Ícone
+        icon_path = BASE_DIR / "images" / "icon.ico"
+        if icon_path.exists():
+            dialog.iconbitmap(str(icon_path))
+        
+        # Centraliza
+        parent_win.update_idletasks()
+        x = parent_win.winfo_x() + (parent_win.winfo_width() // 2) - 250
+        y = parent_win.winfo_y() + (parent_win.winfo_height() // 2) - 300
+        dialog.geometry(f"+{x}+{y}")
+        
+        # Frame principal
+        main_frame = ttk.Frame(dialog, padding=20)
+        main_frame.pack(fill="both", expand=True)
+        
+        ttk.Label(main_frame, text="Novo Usuário", font=("Arial", 14, "bold")).pack(pady=(0, 20))
+        
+        # Campos do formulário
+        fields = []
+        
+        ttk.Label(main_frame, text="Nome de usuário:*", font=("Arial", 9, "bold")).pack(anchor="w", pady=(5, 2))
+        username_var = tk.StringVar()
+        username_entry = ttk.Entry(main_frame, textvariable=username_var, width=30, font=("Arial", 10))
+        username_entry.pack(fill="x", pady=(0, 15))
+        fields.append(("username", username_entry))
+        username_entry.focus()
+        
+        ttk.Label(main_frame, text="Senha:*", font=("Arial", 9, "bold")).pack(anchor="w", pady=(5, 2))
+        password_var = tk.StringVar()
+        password_entry = ttk.Entry(main_frame, textvariable=password_var, show="•", width=30, font=("Arial", 10))
+        password_entry.pack(fill="x", pady=(0, 15))
+        fields.append(("password", password_entry))
+        
+        ttk.Label(main_frame, text="Confirmar senha:*", font=("Arial", 9, "bold")).pack(anchor="w", pady=(5, 2))
+        confirm_var = tk.StringVar()
+        confirm_entry = ttk.Entry(main_frame, textvariable=confirm_var, show="•", width=30, font=("Arial", 10))
+        confirm_entry.pack(fill="x", pady=(0, 15))
+        fields.append(("confirm", confirm_entry))
+        
+        ttk.Label(main_frame, text="Nome completo:*", font=("Arial", 9, "bold")).pack(anchor="w", pady=(5, 2))
+        full_name_var = tk.StringVar()
+        full_name_entry = ttk.Entry(main_frame, textvariable=full_name_var, width=30, font=("Arial", 10))
+        full_name_entry.pack(fill="x", pady=(0, 15))
+        fields.append(("full_name", full_name_entry))
+        
+        ttk.Label(main_frame, text="E-mail:", font=("Arial", 9, "bold")).pack(anchor="w", pady=(5, 2))
+        email_var = tk.StringVar()
+        email_entry = ttk.Entry(main_frame, textvariable=email_var, width=30, font=("Arial", 10))
+        email_entry.pack(fill="x", pady=(0, 15))
+        fields.append(("email", email_entry))
+        
+        ttk.Label(main_frame, text="Função:*", font=("Arial", 9, "bold")).pack(anchor="w", pady=(5, 2))
+        role_var = tk.StringVar(value="operator")
+        role_combo = ttk.Combobox(main_frame, textvariable=role_var, 
+                                values=list(USER_ROLES.keys()), 
+                                state="readonly", width=20, font=("Arial", 10))
+        role_combo.pack(fill="x", pady=(0, 15))
+        
+        # Status
+        status_label = ttk.Label(main_frame, text="", foreground="red")
+        status_label.pack(pady=5)
+        
+        def create_user():
+            """Cria o novo usuário"""
+            username = username_var.get().strip()
+            password = password_var.get()
+            confirm = confirm_var.get()
+            full_name = full_name_var.get().strip()
+            email = email_var.get().strip()
+            role = role_var.get()
+            
+            # Validações
+            if not username:
+                status_label.config(text="Digite um nome de usuário")
+                username_entry.focus()
+                return
+                
+            if not password:
+                status_label.config(text="Digite uma senha")
+                password_entry.focus()
+                return
+                
+            if password != confirm:
+                status_label.config(text="As senhas não coincidem")
+                password_entry.focus()
+                return
+                
+            if not full_name:
+                status_label.config(text="Digite o nome completo")
+                full_name_entry.focus()
+                return
+            
+            # Tenta criar o usuário
+            if self.user_manager.create_user(username, password, role, full_name, email):
+                status_label.config(text="✅ Usuário criado com sucesso!", foreground="green")
+                dialog.after(2000, dialog.destroy)
+                # Atualiza a lista na janela principal
+                if hasattr(parent_win, 'refresh_list'):
+                    parent_win.refresh_list()
+            else:
+                status_label.config(text="❌ Erro ao criar usuário. Nome já existe.")
+        
+        # Botões
+        btn_frame = ttk.Frame(main_frame)
+        btn_frame.pack(fill="x", pady=20)
+        
+        ttk.Button(btn_frame, text="💾 Criar Usuário", 
+                  command=create_user, cursor="hand2").pack(side="left", padx=5)
+        
+        ttk.Button(btn_frame, text="❌ Cancelar", 
+                  command=dialog.destroy, cursor="hand2").pack(side="right", padx=5)
+        
+        # Enter para criar
+        confirm_entry.bind("<Return>", lambda e: create_user())
+
+    def _edit_user_dialog(self, parent_win):
+        """Dialog para editar usuário"""
+        selection = self._get_selected_user_from_tree(parent_win)
+        if not selection:
+            messagebox.showwarning("Aviso", "Selecione um usuário para editar.")
+            return
+        
+        username = selection[0]
+        
+        # Não permite editar o próprio usuário
+        if username == self.current_user['username']:
+            messagebox.showwarning("Aviso", "Não é possível editar o próprio usuário. Use a opção 'Alterar Senha'.")
+            return
+        
+        user_details = self.user_manager.get_user_details(username)
+        if not user_details:
+            messagebox.showerror("Erro", "Usuário não encontrado.")
+            return
+        
+        dialog = tk.Toplevel(parent_win)
+        dialog.title(f"Editar Usuário - {username}")
+        dialog.geometry("500x600")
+        dialog.resizable(False, False)
+        dialog.transient(parent_win)
+        dialog.grab_set()
+
+        # Ícone
+        icon_path = BASE_DIR / "images" / "icon.ico"
+        if icon_path.exists():
+            dialog.iconbitmap(str(icon_path))
+        
+        # Centraliza
+        parent_win.update_idletasks()
+        x = parent_win.winfo_x() + (parent_win.winfo_width() // 2) - 250
+        y = parent_win.winfo_y() + (parent_win.winfo_height() // 2) - 300
+        dialog.geometry(f"+{x}+{y}")
+        
+        # Frame principal
+        main_frame = ttk.Frame(dialog, padding=20)
+        main_frame.pack(fill="both", expand=True)
+        
+        ttk.Label(main_frame, text=f"Editar Usuário: {username}", font=("Arial", 14, "bold")).pack(pady=(0, 20))
+        
+        # Campos do formulário
+        ttk.Label(main_frame, text="Nome completo:*", font=("Arial", 9, "bold")).pack(anchor="w", pady=(5, 2))
+        full_name_var = tk.StringVar(value=user_details.get('full_name', ''))
+        full_name_entry = ttk.Entry(main_frame, textvariable=full_name_var, width=30, font=("Arial", 10))
+        full_name_entry.pack(fill="x", pady=(0, 15))
+        full_name_entry.focus()
+        
+        ttk.Label(main_frame, text="E-mail:", font=("Arial", 9, "bold")).pack(anchor="w", pady=(5, 2))
+        email_var = tk.StringVar(value=user_details.get('email', ''))
+        email_entry = ttk.Entry(main_frame, textvariable=email_var, width=30, font=("Arial", 10))
+        email_entry.pack(fill="x", pady=(0, 15))
+        
+        ttk.Label(main_frame, text="Função:*", font=("Arial", 9, "bold")).pack(anchor="w", pady=(5, 2))
+        role_var = tk.StringVar(value=user_details.get('role', 'operator'))
+        role_combo = ttk.Combobox(main_frame, textvariable=role_var, 
+                                values=list(USER_ROLES.keys()), 
+                                state="readonly", width=20, font=("Arial", 10))
+        role_combo.pack(fill="x", pady=(0, 15))
+        
+        # Frame para status do usuário
+        status_frame = ttk.Frame(main_frame)
+        status_frame.pack(fill="x", pady=10)
+        
+        active_var = tk.BooleanVar(value=user_details.get('active', True))
+        ttk.Checkbutton(status_frame, variable=active_var, 
+                    text="Usuário ativo").pack(anchor="w")
+        
+        # Alteração de senha
+        ttk.Label(main_frame, text="Alterar senha (deixe em branco para manter a atual):", 
+                font=("Arial", 9, "bold")).pack(anchor="w", pady=(15, 2))
+        
+        ttk.Label(main_frame, text="Nova senha:", font=("Arial", 9)).pack(anchor="w", pady=(5, 2))
+        new_password_var = tk.StringVar()
+        new_password_entry = ttk.Entry(main_frame, textvariable=new_password_var, show="•", width=30, font=("Arial", 10))
+        new_password_entry.pack(fill="x", pady=(0, 10))
+        
+        ttk.Label(main_frame, text="Confirmar nova senha:", font=("Arial", 9)).pack(anchor="w", pady=(5, 2))
+        confirm_password_var = tk.StringVar()
+        confirm_password_entry = ttk.Entry(main_frame, textvariable=confirm_password_var, show="•", width=30, font=("Arial", 10))
+        confirm_password_entry.pack(fill="x", pady=(0, 15))
+        
+        # Status
+        status_label = ttk.Label(main_frame, text="", foreground="red")
+        status_label.pack(pady=5)
+        
+        def save_changes():
+            """Salva as alterações do usuário"""
+            full_name = full_name_var.get().strip()
+            email = email_var.get().strip()
+            role = role_var.get()
+            active = active_var.get()
+            new_password = new_password_var.get()
+            confirm_password = confirm_password_var.get()
+            
+            # Validações
+            if not full_name:
+                status_label.config(text="Digite o nome completo")
+                full_name_entry.focus()
+                return
+            
+            if new_password and new_password != confirm_password:
+                status_label.config(text="As senhas não coincidem")
+                new_password_entry.focus()
+                return
+            
+            # Prepara os dados para atualização
+            update_data = {
+                'full_name': full_name,
+                'email': email,
+                'role': role,
+                'active': active
+            }
+            
+            # Se foi informada uma nova senha, adiciona aos dados
+            if new_password:
+                update_data['password'] = new_password
+            
+            # Tenta atualizar o usuário
+            if self.user_manager.update_user(username, **update_data):
+                status_label.config(text="✅ Usuário atualizado com sucesso!", foreground="green")
+                dialog.after(2000, dialog.destroy)
+                # Atualiza a lista na janela principal
+                if hasattr(parent_win, 'refresh_list'):
+                    parent_win.refresh_list()
+            else:
+                status_label.config(text="❌ Erro ao atualizar usuário")
+        
+        # Botões
+        btn_frame = ttk.Frame(main_frame)
+        btn_frame.pack(fill="x", pady=20)
+        
+        ttk.Button(btn_frame, text="💾 Salvar Alterações", 
+                command=save_changes, cursor="hand2").pack(side="left", padx=5)
+        
+        ttk.Button(btn_frame, text="❌ Cancelar", 
+                command=dialog.destroy, cursor="hand2").pack(side="right", padx=5)
+        
+        # Enter para salvar
+        confirm_password_entry.bind("<Return>", lambda e: save_changes())
+
+    def _delete_user_dialog(self, parent_win):
+        """Dialog para excluir usuário"""
+        selection = self._get_selected_user_from_tree(parent_win)
+        if not selection:
+            messagebox.showwarning("Aviso", "Selecione um usuário para excluir.")
+            return
+        
+        username = selection[0]
+        user_details = self.user_manager.get_user_details(username)
+        
+        if not user_details:
+            messagebox.showerror("Erro", "Usuário não encontrado.")
+            return
+        
+        # Não permite excluir o próprio usuário
+        if username == self.current_user['username']:
+            messagebox.showwarning("Aviso", "Não é possível excluir o próprio usuário.")
+            return
+        
+        # Verifica se é o último admin
+        admin_count = sum(1 for u in self.user_manager.get_users_list() 
+                        if u['role'] == 'admin' and u['active'])
+        if user_details['role'] == 'admin' and admin_count <= 1:
+            messagebox.showwarning("Aviso", 
+                                "Não é possível excluir o último administrador ativo.\n"
+                                "Promova outro usuário para administrador primeiro.")
+            return
+        
+        # Confirmação de exclusão
+        confirm = messagebox.askyesno(
+            "Confirmar Exclusão",
+            f"🚨 TEM CERTEZA QUE DESEJA EXCLUIR O USUÁRIO?\n\n"
+            f"Usuário: {username}\n"
+            f"Nome: {user_details.get('full_name', 'N/A')}\n"
+            f"Função: {USER_ROLES.get(user_details.get('role'), user_details.get('role'))}\n\n"
+            f"Esta ação não pode ser desfeita!",
+            icon=messagebox.WARNING
+        )
+        
+        if confirm:
+            if self.user_manager.delete_user(username):
+                messagebox.showinfo("Sucesso", f"Usuário '{username}' excluído com sucesso!")
+                # Atualiza a lista na janela principal
+                if hasattr(parent_win, 'refresh_list'):
+                    parent_win.refresh_list()
+            else:
+                messagebox.showerror("Erro", f"Erro ao excluir usuário '{username}'")
+
+    def _get_selected_user_from_tree(self, parent_win):
+        """Obtém o usuário selecionado na treeview da janela de gerenciamento"""
+        for widget in parent_win.winfo_children():
+            if isinstance(widget, ttk.Frame):
+                for child in widget.winfo_children():
+                    if isinstance(child, ttk.LabelFrame):
+                        for tree_child in child.winfo_children():
+                            if isinstance(tree_child, ttk.Treeview):
+                                selection = tree_child.selection()
+                                if selection:
+                                    values = tree_child.item(selection[0], "values")
+                                    return values
+        return None
+
+    def change_own_password(self):
+        """Permite ao usuário atual alterar sua própria senha"""
+        dialog = tk.Toplevel(self)
+        dialog.title("Alterar Minha Senha")
+        dialog.geometry("400x400")
+        dialog.resizable(False, False)
+        dialog.transient(self)
+        dialog.grab_set()
+
+        # Ícone
+        icon_path = BASE_DIR / "images" / "icon.ico"
+        if icon_path.exists():
+            dialog.iconbitmap(str(icon_path))
+        
+        # Centraliza
+        self.update_idletasks()
+        x = self.winfo_x() + (self.winfo_width() // 2) - 200
+        y = self.winfo_y() + (self.winfo_height() // 2) - 200
+        dialog.geometry(f"+{x}+{y}")
+        
+        # Frame principal
+        main_frame = ttk.Frame(dialog, padding=20)
+        main_frame.pack(fill="both", expand=True)
+        
+        ttk.Label(main_frame, text="Alterar Minha Senha", font=("Arial", 14, "bold")).pack(pady=(0, 20))
+        
+        ttk.Label(main_frame, text=f"Usuário: {self.current_user['username']}", 
+                font=("Arial", 10)).pack(anchor="w", pady=(0, 10))
+        
+        # Campos de senha
+        ttk.Label(main_frame, text="Senha atual:*", font=("Arial", 9, "bold")).pack(anchor="w", pady=(5, 2))
+        current_password_var = tk.StringVar()
+        current_password_entry = ttk.Entry(main_frame, textvariable=current_password_var, show="•", width=30, font=("Arial", 10))
+        current_password_entry.pack(fill="x", pady=(0, 15))
+        current_password_entry.focus()
+        
+        ttk.Label(main_frame, text="Nova senha:*", font=("Arial", 9, "bold")).pack(anchor="w", pady=(5, 2))
+        new_password_var = tk.StringVar()
+        new_password_entry = ttk.Entry(main_frame, textvariable=new_password_var, show="•", width=30, font=("Arial", 10))
+        new_password_entry.pack(fill="x", pady=(0, 10))
+        
+        ttk.Label(main_frame, text="Confirmar nova senha:*", font=("Arial", 9, "bold")).pack(anchor="w", pady=(5, 2))
+        confirm_password_var = tk.StringVar()
+        confirm_password_entry = ttk.Entry(main_frame, textvariable=confirm_password_var, show="•", width=30, font=("Arial", 10))
+        confirm_password_entry.pack(fill="x", pady=(0, 15))
+        
+        # Status
+        status_label = ttk.Label(main_frame, text="", foreground="red")
+        status_label.pack(pady=5)
+        
+        def save_password():
+            """Salva a nova senha"""
+            current_password = current_password_var.get()
+            new_password = new_password_var.get()
+            confirm_password = confirm_password_var.get()
+            
+            # Validações
+            if not current_password:
+                status_label.config(text="Digite a senha atual")
+                current_password_entry.focus()
+                return
+            
+            if not new_password:
+                status_label.config(text="Digite a nova senha")
+                new_password_entry.focus()
+                return
+            
+            if new_password != confirm_password:
+                status_label.config(text="As novas senhas não coincidem")
+                new_password_entry.focus()
+                return
+            
+            # Verifica se a senha atual está correta
+            if not self.user_manager.verify_password(current_password, 
+                                                self.user_manager.users[self.current_user['username']]['password']):
+                status_label.config(text="Senha atual incorreta")
+                current_password_entry.focus()
+                return
+            
+            # Altera a senha
+            if self.user_manager.change_password(self.current_user['username'], new_password):
+                status_label.config(text="✅ Senha alterada com sucesso!", foreground="green")
+                dialog.after(2000, dialog.destroy)
+            else:
+                status_label.config(text="❌ Erro ao alterar senha")
+        
+        # Botões
+        btn_frame = ttk.Frame(main_frame)
+        btn_frame.pack(fill="x", pady=20)
+        
+        ttk.Button(btn_frame, text="💾 Alterar Senha", 
+                command=save_password, cursor="hand2").pack(side="left", padx=5)
+        
+        ttk.Button(btn_frame, text="❌ Cancelar", 
+                command=dialog.destroy, cursor="hand2").pack(side="right", padx=5)
+        
+        # Enter para salvar
+        confirm_password_entry.bind("<Return>", lambda e: save_password())
+
     # ---------- CONFIGURAÇÕES ----------
     def config_window(self):
         """Janela de configurações"""
+        if not self.check_permission("system_config"):
+            return
+            
         win = tk.Toplevel(self)
         win.title("Configurações do Sistema")
         win.geometry("500x650")
@@ -4470,7 +5727,7 @@ class GerenciadorFirebirdApp(tk.Tk):
         def on_firebird_path_change(*args):
             self.after(500, self._update_exe_status)
         
-        firebird_path_var.trace("w", on_firebird_path_change)
+        firebird_path_var.trace_add("write", on_firebird_path_change)
 
     def pick_firebird_folder(self, var):
         """Seleciona pasta do Firebird"""
@@ -4544,6 +5801,9 @@ class GerenciadorFirebirdApp(tk.Tk):
     # ---------- EDITOR DE SQL ----------
     def open_sql_console(self):
         """Abre console SQL para executar consultas no banco de dados"""
+        if not self.check_permission("sql_console"):
+            return
+            
         db_path = filedialog.askopenfilename(
             title="Selecione o banco de dados para conectar",
             filetypes=[("Firebird Database", "*.fdb"), ("Todos os arquivos", "*.*")]
