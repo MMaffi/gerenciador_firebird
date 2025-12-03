@@ -380,6 +380,56 @@ def check_for_updates(conf):
         logging.error(f"Erro ao verificar atualizações: {e}")
         return None
 
+def check_for_updates_thread_safe(conf):
+    """Versão thread-safe para verificar atualizações"""
+    try:
+        # Verifica se o usuário ignorou esta versão
+        ignored_version = conf.get("ignored_version")
+        
+        import urllib.request
+        import json as json_lib
+        
+        response = urllib.request.urlopen(VERSION_CHECK_URL, timeout=10)
+        data = json_lib.loads(response.read().decode())
+        
+        latest_version = data.get("latest_version")
+        download_url = data.get("download_url")
+        release_notes = data.get("release_notes", "")
+        
+        if (latest_version and 
+            latest_version != APP_VERSION and 
+            latest_version != ignored_version):
+            return {
+                "current_version": APP_VERSION,
+                "latest_version": latest_version,
+                "download_url": download_url,
+                "release_notes": release_notes
+            }
+        
+        return None  # Retorna None quando já está na versão mais recente
+        
+    except Exception as e:
+        logging.error(f"Erro ao verificar atualizações: {e}")
+        return None
+    
+def check_updates_in_thread(conf, callback):
+    """Verifica atualizações em uma thread separada"""
+    def worker():
+        try:
+            # Atualiza o timestamp da última verificação
+            conf["last_update_check"] = datetime.now().isoformat()
+            # Salva em uma cópia para evitar problemas de thread
+            conf_copy = conf.copy()
+            
+            update_info = check_for_updates_thread_safe(conf_copy)
+            callback(update_info)
+        except Exception as e:
+            logging.error(f"Erro na thread de verificação de atualizações: {e}")
+            callback(None)
+    
+    thread = threading.Thread(target=worker, daemon=True)
+    thread.start()
+
 # ---------- GERENCIADOR DE CONFIG ----------
 def find_firebird_executables(firebird_path):
     """Encontra automaticamente os executáveis do Firebird na pasta especificada"""
@@ -642,6 +692,9 @@ class GerenciadorFirebirdApp(tk.Tk):
         
         # Carrega configurações
         self.conf = load_config()
+
+        # Verificação de atualizações
+        self.update_check_in_progress = False
         
         # Verifica se deve fazer login automático
         if self.conf.get("auto_login", False):
@@ -868,7 +921,8 @@ class GerenciadorFirebirdApp(tk.Tk):
             
             self.logger.info("Gerenciador Firebird iniciado com sucesso")
             
-            self.after(3000, self.check_and_notify_update)
+            # Inicia verificação de atualizações em thread separada
+            self.after(1000, self.check_and_notify_update_in_thread)
             
         except Exception as e:
             self.logger.critical(f"Falha crítica ao iniciar aplicação: {e}")
@@ -993,6 +1047,38 @@ class GerenciadorFirebirdApp(tk.Tk):
                 f"Seu nível: {USER_ROLES.get(self.current_user['role'], self.current_user['role'])}"
             )
         return False
+    
+    def check_and_notify_update_in_thread(self):
+        """Verifica atualizações em thread separada para não bloquear a UI"""
+        if self.update_check_in_progress:
+            return  # Já está verificando, não faz nada
+        
+        try:
+            self.update_check_in_progress = True
+            self.log("🔍 Verificando atualizações em segundo plano...", "info")
+            
+            def update_callback(update_info):
+                """Callback chamado quando a verificação de atualizações termina"""
+                self.update_check_in_progress = False
+                
+                if update_info:
+                    # Só exibe uma única notificação
+                    self.after(0, lambda: self.show_update_notification(update_info))
+                    # Log ÚNICO de nova versão encontrada
+                    self.log(f"📢 Nova versão disponível: {update_info['latest_version']}", "info")
+                else:
+                    # Log único quando está na versão mais recente
+                    self.log("✅ Você está na versão mais recente", "success")
+                    # Salva a data da última verificação
+                    self.conf["last_update_check"] = datetime.now().isoformat()
+                    save_config(self.conf)
+            
+            # Chama a verificação em thread separada
+            check_updates_in_thread(self.conf, update_callback)
+            
+        except Exception as e:
+            self.update_check_in_progress = False
+            self.log(f"⚠️ Verificação de atualização falhou: {e}", "debug")
 
     def _setup_ui(self):
         """Configura interface do usuário"""
@@ -2055,16 +2141,37 @@ class GerenciadorFirebirdApp(tk.Tk):
             self.log(f"⚠️ Verificação de atualização falhou: {e}", "debug")
 
     def check_update_manual(self):
-        """Verificação manual de atualizações"""
+        """Verificação manual de atualizações em thread separada"""
+        if self.update_check_in_progress:
+            messagebox.showinfo("Aviso", "Já há uma verificação de atualização em andamento.")
+            return
+        
+        self.update_check_in_progress = True
         self.log("🔍 Verificando atualizações manualmente...", "info")
+        self.set_status("Verificando atualizações...", "blue")
         
-        self.conf["last_update_check"] = None
-        update_info = check_for_updates(self.conf)
+        def update_callback(update_info):
+            """Callback para verificação manual"""
+            self.update_check_in_progress = False
+            
+            if update_info:
+                # Só exibe uma notificação
+                self.after(0, lambda: self.show_update_notification(update_info))
+                self.set_status("✅ Nova versão disponível!", "green")
+                # Log ÚNICO
+                self.log(f"📢 Nova versão disponível: {update_info['latest_version']}", "info")
+            else:
+                self.after(0, lambda: messagebox.showinfo("Verificação de Atualização", 
+                                                        "✅ Você está usando a versão mais recente!"))
+                self.set_status("Pronto", "gray")
+                # Log único
+                self.log("✅ Você está na versão mais recente", "success")
+                # Salva a data da última verificação
+                self.conf["last_update_check"] = datetime.now().isoformat()
+                save_config(self.conf)
         
-        if update_info:
-            self.show_update_notification(update_info)
-        else:
-            messagebox.showinfo("Verificação de Atualização", "✅ Você está usando a versão mais recente!")
+        # Chama a verificação em thread separada
+        check_updates_in_thread(self.conf, update_callback)
 
     def show_update_notification(self, update_info):
         """Mostra janela de notificação de atualização"""
@@ -2189,7 +2296,7 @@ class GerenciadorFirebirdApp(tk.Tk):
         # Foca na janela
         update_win.focus_force()
         
-        self.log(f"📢 Nova versão disponível: {update_info['latest_version']}", "info")
+        # self.log(f"📢 Nova versão disponível: {update_info['latest_version']}", "info")
 
     # ---------- SISTEMA DE BANDEJA ----------
     def create_tray_icon(self):
