@@ -66,7 +66,7 @@ DEFAULT_KEEP_BACKUPS = 5
 REPORTS_DIR = BASE_DIR / "Relatórios"
 
 # Constantes para controle de versão
-APP_VERSION = "2025.11.25.0815"
+APP_VERSION = "2025.12.16.1345"
 VERSION_CHECK_URL = "https://raw.githubusercontent.com/MMaffi/gerenciador_firebird/main/version.json"
 
 # Opções disponíveis de pageSize
@@ -2065,11 +2065,8 @@ class GerenciadorFirebirdApp(tk.Tk):
             
             # Tópicos/Especificações da versão
             especificacoes = [
-                            "✓ Novo controle de usuários",
-                            "✓ Novo método de segurança",
-                            "✓ Sistema de permissões de usuários",
-                            "✓ Sistemas de Login e Logoff",
-                            "✓ Implementações de login automático"
+                            "✓ Mudança na verificação de atualizações",
+                            "✓ Verificação de versão em thread"
                         ]
             
             for especificacao in especificacoes:

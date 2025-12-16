@@ -1,5 +1,5 @@
 {
-    "latest_version": "2025.11.25.0815",
+    "latest_version": "2025.12.16.1345",
     "download_url": "https://github.com/MMaffi/gerenciador_firebird/releases/latest/download/GerenciadorFirebird_Installer.exe",
-    "release_notes": "✓ Novo controle de usuários\n✓ Novo método de segurança\n✓ Sistema de permissões de usuários\n✓ Sistemas de Login e Logoff\n✓ Implementações de login automático"
+    "release_notes": "✓ Mudança na verificação de atualizações\n✓ Verificação de versão em thread"
 }
