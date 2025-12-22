@@ -1181,6 +1181,22 @@ class GerenciadorFirebirdApp(tk.Tk):
         # Footer
         self._create_footer()
 
+        # Adiciona binding para detectar mudança de aba
+        self.notebook.bind("<<NotebookTabChanged>>", self._on_tab_change)
+
+    def _on_tab_change(self, event=None):
+        """Callback quando o usuário muda de aba"""
+        current_tab = self.notebook.index(self.notebook.select())
+        self.current_tab_index = current_tab
+
+    def switch_to_main_tab(self):
+        """Muda para a aba Principal"""
+        try:
+            self.notebook.select(0)
+            self.update_idletasks()
+        except Exception as e:
+            print(f"Erro ao mudar para aba principal: {e}")    
+
     def _create_dashboard_tab(self):
         """Cria aba principal"""
         dashboard_frame = ttk.Frame(self.notebook)
@@ -2621,18 +2637,17 @@ class GerenciadorFirebirdApp(tk.Tk):
                 self.dev_buffer += event.char
 
     # ---------- EXECUÇÃO DE COMANDOS ----------
-    def run_command(self, cmd, on_finish=None):
+    def run_command(self, cmd, on_finish=None, show_progress=True):
         """Executa comandos em thread separada"""
         def worker():
             self.task_running = True
             self.disable_buttons()
             
-            # Inicia a animação da barra de progresso
-            self.progress["mode"] = "indeterminate"
-            self.progress.start(10)
+            # Se show_progress é True, muda para aba Principal e mostra barra
+            if show_progress:
+                self.after(0, self.switch_to_main_tab)
+                self.after(100, lambda: self._start_progress_animation())
             
-            self.set_status("Executando operação...", "blue")
-
             try:
                 self.log(f"Executando comando: {' '.join(cmd)}", "debug")
 
@@ -2679,9 +2694,9 @@ class GerenciadorFirebirdApp(tk.Tk):
                 self.log(error_msg, "error")
                 self.set_status("❌ Falha inesperada.", "red")
             finally:
-                self.progress.stop()
-                self.progress["mode"] = "determinate"
-                self.progress["value"] = 0
+                # Para a animação da barra de progresso
+                if show_progress:
+                    self.after(0, self._stop_progress_animation)
                 
                 self.enable_buttons()
                 self.task_running = False
@@ -2689,6 +2704,18 @@ class GerenciadorFirebirdApp(tk.Tk):
                     self.after(100, on_finish)
 
         threading.Thread(target=worker, daemon=True).start()
+
+    def _start_progress_animation(self):
+        """Inicia a animação da barra de progresso"""
+        self.progress["mode"] = "indeterminate"
+        self.progress.start(10)
+        self.set_status("Executando operação...", "blue")
+
+    def _stop_progress_animation(self):
+        """Para a animação da barra de progresso"""
+        self.progress.stop()
+        self.progress["mode"] = "determinate"
+        self.progress["value"] = 0
 
     def _get_connection_string(self):
         """Retorna a string de conexão com host e porta"""
@@ -3560,6 +3587,9 @@ class GerenciadorFirebirdApp(tk.Tk):
             "Deseja criar um backup de segurança agora?",
             icon=messagebox.WARNING
         )
+
+        # Muda para aba Principal antes de começar
+        self.switch_to_main_tab()
         
         if response:
             # Cria backup de segurança antes da correção
@@ -3669,6 +3699,9 @@ class GerenciadorFirebirdApp(tk.Tk):
         ):
             return
 
+        # Muda para aba Principal antes de começar
+        self.switch_to_main_tab()
+
         cmd = [
             gfix, "-sweep",
             db,
@@ -3722,6 +3755,9 @@ class GerenciadorFirebirdApp(tk.Tk):
             icon=messagebox.QUESTION
         ):
             return
+        
+        # Muda para aba Principal antes de começar
+        self.switch_to_main_tab()
 
         # Cria pasta temporária
         db_path = Path(db)
@@ -4520,6 +4556,9 @@ class GerenciadorFirebirdApp(tk.Tk):
             return
         
         self.log("🔧 Iniciando otimização do banco...", "info")
+
+        # Muda para aba Principal antes de começar
+        self.switch_to_main_tab()
         
         # Comandos de otimização
         commands = [
@@ -4595,6 +4634,9 @@ class GerenciadorFirebirdApp(tk.Tk):
             f"✅ Continuar com a migração?"
         ):
             return
+
+        # Muda para aba Principal antes de começar
+        self.switch_to_main_tab()
         
         backup_dir = Path(self.conf.get("backup_dir", DEFAULT_BACKUP_DIR))
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
