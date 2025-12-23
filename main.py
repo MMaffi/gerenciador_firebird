@@ -11,6 +11,10 @@ import shutil
 import subprocess
 import tempfile
 import zipfile
+import patoolib
+from patoolib.util import PatoolError
+import rarfile
+import py7zr
 import psutil
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -3024,9 +3028,15 @@ class GerenciadorFirebirdApp(tk.Tk):
         self.conf["gbak_path"] = gbak
         save_config(self.conf)
 
+        # Tipos de arquivo suportados
         bkp = filedialog.askopenfilename(
             title="Selecione o arquivo de backup", 
-            filetypes=[("Backup Files", "*.fbk *.zip"), ("Todos os arquivos", "*.*")]
+            filetypes=[
+                ("Compatíveis", "*.fbk *.zip *.rar *.7z *.tar.gz *.tar.bz2"),
+                ("Backup Files", "*.fbk"),
+                ("Arquivos Compactados", "*.zip *.rar *.7z *.tar.gz *.tar.bz2"),
+                ("Todos os arquivos", "*.*")
+            ]
         )
         if not bkp:
             return
@@ -3035,57 +3045,84 @@ class GerenciadorFirebirdApp(tk.Tk):
         self.extracted_files = []
         self.extraction_cancelled = False
 
-        # Extrai se for arquivo ZIP
-        if bkp.lower().endswith(".zip"):
-            self._extract_zip_backup(bkp)
+        # Verifica se é um arquivo compactado
+        compressed_extensions = ['.zip', '.rar', '.7z', '.tar.gz', '.tgz', '.tar.bz2', '.tbz2']
+        file_ext = Path(bkp).suffix.lower()
+        
+        # Para extensões compostas
+        if file_ext in ['.gz', '.bz2']:
+            if Path(bkp).suffixes[-2:] == ['.tar', '.gz']:
+                file_ext = '.tar.gz'
+            elif Path(bkp).suffixes[-2:] == ['.tar', '.bz2']:
+                file_ext = '.tar.bz2'
+        
+        if any(bkp.lower().endswith(ext) for ext in compressed_extensions):
+            self._extract_compressed_backup(bkp)
         else:
             self._restore_fbk_backup(bkp)
 
-    def _extract_zip_backup(self, bkp):
-        """Extrai backup ZIP"""
+    def _extract_compressed_backup(self, bkp):
+        """Extrai backup compactado"""
         try:
             # Cria janela de extração
             self._create_progress_window()
             self.update_idletasks()
 
-            zip_path = Path(bkp)
-            self.extract_dir = zip_path.parent / f"{zip_path.stem}_extracted"
+            bkp_path = Path(bkp)
+            file_ext = bkp_path.suffix.lower()
+            
+            # Para extensões compostas
+            if file_ext in ['.gz', '.bz2']:
+                if bkp_path.suffixes[-2:] == ['.tar', '.gz']:
+                    file_ext = '.tar.gz'
+                elif bkp_path.suffixes[-2:] == ['.tar', '.bz2']:
+                    file_ext = '.tar.bz2'
+            
+            self.extract_dir = bkp_path.parent / f"{bkp_path.stem}_extracted"
             self.extract_dir.mkdir(exist_ok=True)
             
-            self.log(f"📦 Iniciando extração do arquivo ZIP: {zip_path.name}", "info")
-            self._update_progress(f"Analisando arquivo: {zip_path.name}")
+            self.log(f"📦 Iniciando extração do arquivo {file_ext.upper()}: {bkp_path.name}", "info")
+            self._update_progress(f"Analisando arquivo: {bkp_path.name}")
             
-            try:
-                with zipfile.ZipFile(bkp, "r") as z:
-                    file_list = z.namelist()
-                    total_files = len(file_list)
-                    self._update_progress(f"Encontrados {total_files} arquivos no ZIP")
-                    time.sleep(0.5)
-            except:
-                pass
+            # Detecta tipo de arquivo
+            file_type = self._detect_archive_type(bkp)
+            self._update_progress(f"Tipo detectado: {file_type}")
+            time.sleep(0.5)
             
             self._update_progress("Iniciando extração...")
             
             def extract_with_progress():
-                """Extrai arquivo ZIP"""
+                """Extrai arquivo compactado"""
                 try:
-                    with zipfile.ZipFile(bkp, "r") as z:
-                        total_files = len(z.filelist)
-                        files_extracted = 0
+                    if self.extraction_cancelled:
+                        return False
+                    
+                    try:
+                        patoolib.extract_archive(
+                            str(bkp_path),
+                            outdir=str(self.extract_dir),
+                            interactive=False
+                        )
+                        self.log(f"✅ Extração concluída usando patoolib: {bkp_path.name}", "success")
+                        return True
                         
-                        for zinfo in z.filelist:
-                            if self.extraction_cancelled:
-                                break
-
-                            files_extracted += 1
-                            self._update_progress(f"Extraindo arquivo {files_extracted} de {total_files}")
-                            
-                            z.extract(zinfo, self.extract_dir)
-                            
-                            self.after(10, lambda: None)
-                    
-                    return not self.extraction_cancelled
-                    
+                    except PatoolError as e:
+                        self.log(f"⚠️ Patoolib falhou, tentando método específico: {e}", "warning")
+                        
+                        if bkp_path.suffix.lower() == '.rar':
+                            return self._extract_rar_file(bkp_path)
+                        elif bkp_path.suffix.lower() == '.7z':
+                            return self._extract_7z_file(bkp_path)
+                        elif bkp_path.suffix.lower() in ['.tar.gz', '.tgz', '.tar.bz2', '.tbz2']:
+                            return self._extract_tar_file(bkp_path)
+                        else:
+                            try:
+                                with zipfile.ZipFile(bkp_path, 'r') as z:
+                                    z.extractall(self.extract_dir)
+                                return True
+                            except:
+                                raise Exception(f"Não foi possível extrair o arquivo {bkp_path.name}")
+                                
                 except Exception as e:
                     self.log(f"❌ Erro durante extração: {e}", "error")
                     return False
@@ -3093,16 +3130,79 @@ class GerenciadorFirebirdApp(tk.Tk):
             # Executa extração em thread separada
             def extraction_worker():
                 success = extract_with_progress()
-                
                 self.after(0, lambda: self._after_extraction(success, bkp))
             
             threading.Thread(target=extraction_worker, daemon=True).start()
             
         except Exception as e:
             self._close_progress_window()
-            messagebox.showerror("Erro", f"Falha ao extrair arquivo ZIP: {e}")
+            messagebox.showerror("Erro", f"Falha ao extrair arquivo: {e}")
             if hasattr(self, 'extract_dir') and self.extract_dir.exists():
                 shutil.rmtree(self.extract_dir, ignore_errors=True)
+
+    def _detect_archive_type(self, filepath):
+        """Detecta o tipo de arquivo compactado"""
+        path = Path(filepath)
+        ext = path.suffix.lower()
+        
+        # Verifica extensões compostas
+        if len(path.suffixes) >= 2:
+            if path.suffixes[-2:] == ['.tar', '.gz']:
+                return 'tar.gz'
+            elif path.suffixes[-2:] == ['.tar', '.bz2']:
+                return 'tar.bz2'
+
+        extension_map = {
+            '.zip': 'ZIP',
+            '.rar': 'RAR',
+            '.7z': '7-Zip',
+            '.tar': 'TAR',
+            '.gz': 'GZIP',
+            '.bz2': 'BZIP2',
+            '.tgz': 'GZipped TAR',
+            '.tbz2': 'BZIP2 TAR'
+        }
+        
+        return extension_map.get(ext, f"Desconhecido ({ext})")
+
+    def _extract_rar_file(self, rar_path):
+        """Extrai arquivos RAR específicos"""
+        try:
+            import rarfile
+            with rarfile.RarFile(rar_path) as rf:
+                rf.extractall(self.extract_dir)
+            return True
+        except Exception as e:
+            self.log(f"❌ Falha ao extrair RAR: {e}", "error")
+            return False
+
+    def _extract_7z_file(self, sevenz_path):
+        """Extrai arquivos 7-Zip"""
+        try:
+            import py7zr
+            with py7zr.SevenZipFile(sevenz_path, mode='r') as z:
+                z.extractall(self.extract_dir)
+            return True
+        except Exception as e:
+            self.log(f"❌ Falha ao extrair 7z: {e}", "error")
+            return False
+
+    def _extract_tar_file(self, tar_path):
+        """Extrai arquivos TAR"""
+        try:
+            import tarfile
+            mode = 'r:'
+            if tar_path.suffix.lower() in ['.gz', '.tgz']:
+                mode = 'r:gz'
+            elif tar_path.suffix.lower() in ['.bz2', '.tbz2']:
+                mode = 'r:bz2'
+            
+            with tarfile.open(tar_path, mode) as tf:
+                tf.extractall(self.extract_dir)
+            return True
+        except Exception as e:
+            self.log(f"❌ Falha ao extrair TAR: {e}", "error")
+            return False
 
     def _create_progress_window(self):
         """Cria janela de progresso para extração"""
@@ -3178,10 +3278,15 @@ class GerenciadorFirebirdApp(tk.Tk):
         
         # Busca arquivos .fbk extraídos
         extract_dir = Path(bkp).parent / f"{Path(bkp).stem}_extracted"
-        fbks = list(extract_dir.glob("*.fbk"))
+        
+        # Procura recursivamente por arquivos .fbk
+        fbks = list(extract_dir.rglob("*.fbk"))
         
         if not fbks:
-            messagebox.showerror("Erro", "Nenhum arquivo .fbk encontrado dentro do ZIP.")
+            fbks = list(extract_dir.rglob("*.fdb"))
+            
+        if not fbks:
+            messagebox.showerror("Erro", "Nenhum arquivo .fbk ou .fdb encontrado dentro do arquivo compactado.")
             if extract_dir.exists():
                 shutil.rmtree(extract_dir, ignore_errors=True)
             return
@@ -3191,7 +3296,6 @@ class GerenciadorFirebirdApp(tk.Tk):
         
         self.log(f"✅ Arquivo extraído: {actual_backup}", "success")
         
-        # Continua com seleção de destino
         dest = filedialog.asksaveasfilename(
             title="Salvar banco restaurado como...",
             defaultextension=".fdb",
