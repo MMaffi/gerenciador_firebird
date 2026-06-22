@@ -20,6 +20,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 import threading
 import logging
+from logging.handlers import RotatingFileHandler
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox, scrolledtext, simpledialog, Label
 import time
@@ -29,6 +30,21 @@ import winreg
 import winshell
 from win32com.client import Dispatch
 import hashlib
+import hmac
+import copy
+
+from app_core import (
+    atomic_write_json,
+    cleanup_old_backups as cleanup_backups_core,
+    compress_backup,
+    redact_command,
+    safe_extract_tar,
+    safe_extract_archive,
+    safe_extract_zip,
+    validate_archive_members,
+    validate_password,
+)
+from secure_store import PREFIX as SECRET_PREFIX, protect_secret, unprotect_secret
 
 # ------- EXECUTA EM MODO ADM -------
 def is_admin():
@@ -60,14 +76,30 @@ def run_as_admin():
 if getattr(sys, 'frozen', False):
     # Executável PyInstaller
     BASE_DIR = Path(sys.executable).parent
+    DATA_DIR = Path(os.getenv("LOCALAPPDATA", BASE_DIR)) / "GerenciadorFirebird"
 else:
     BASE_DIR = Path(__file__).resolve().parent
+    DATA_DIR = BASE_DIR
 
-CONFIG_PATH = BASE_DIR / "config.json"
-LOG_FILE = BASE_DIR / "gerenciador_firebird.log"
-DEFAULT_BACKUP_DIR = BASE_DIR / "backups"
+DATA_DIR.mkdir(parents=True, exist_ok=True)
+
+# Em builds instalados, dados mutáveis ficam no perfil do usuário. Migra versões
+# antigas que gravavam ao lado do executável sempre que isso for possível.
+if DATA_DIR != BASE_DIR:
+    for legacy_name in ("config.json", "users.json"):
+        legacy_path = BASE_DIR / legacy_name
+        current_path = DATA_DIR / legacy_name
+        if legacy_path.exists() and not current_path.exists():
+            try:
+                shutil.copy2(legacy_path, current_path)
+            except OSError:
+                pass
+
+CONFIG_PATH = DATA_DIR / "config.json"
+LOG_FILE = DATA_DIR / "gerenciador_firebird.log"
+DEFAULT_BACKUP_DIR = DATA_DIR / "backups"
 DEFAULT_KEEP_BACKUPS = 5
-REPORTS_DIR = BASE_DIR / "Relatórios"
+REPORTS_DIR = DATA_DIR / "Relatórios"
 
 # Constantes para controle de versão
 APP_VERSION = "2025.12.29.1110"
@@ -113,7 +145,8 @@ DEFAULT_USERS = {
         "email": "admin@admin.com",
         "created_at": None,
         "last_login": None,
-        "active": True
+        "active": True,
+        "must_change_password": True
     }
 }
 
@@ -165,7 +198,9 @@ def setup_logging():
         datefmt='%Y-%m-%d %H:%M:%S'
     )
 
-    file_handler = logging.FileHandler(LOG_FILE, encoding='utf-8')
+    file_handler = RotatingFileHandler(
+        LOG_FILE, maxBytes=5 * 1024 * 1024, backupCount=5, encoding='utf-8'
+    )
     file_handler.setFormatter(formatter)
     logger.addHandler(file_handler)
     
@@ -186,10 +221,10 @@ class UserManager:
                 with open(self.users_file, 'r', encoding='utf-8') as f:
                     self.users = json.load(f)
             except:
-                self.users = DEFAULT_USERS.copy()
-                self._hash_default_passwords()
+                logging.exception("Arquivo de usuários inválido; a autenticação foi bloqueada")
+                raise RuntimeError("users.json está inválido. Restaure o arquivo antes de iniciar.")
         else:
-            self.users = DEFAULT_USERS.copy()
+            self.users = copy.deepcopy(DEFAULT_USERS)
             self._hash_default_passwords()
             self.save_users()
     
@@ -204,47 +239,37 @@ class UserManager:
         try:
             import bcrypt
             return bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
-        except ImportError:
-            return hashlib.sha256(f"{password}salt".encode()).hexdigest()
+        except ImportError as exc:
+            raise RuntimeError("A dependência bcrypt é obrigatória para autenticação segura") from exc
     
     def verify_password(self, password: str, hashed: str) -> bool:
         """Verifica se a senha corresponde ao hash"""
-        try:
+        if hashed.startswith(('$2a$', '$2b$', '$2y$')):
             import bcrypt
             return bcrypt.checkpw(password.encode('utf-8'), hashed.encode('utf-8'))
-        except ImportError:
-            return hashlib.sha256(f"{password}salt".encode()).hexdigest() == hashed
+        # Compatibilidade temporária com hashes antigos; são atualizados no login.
+        legacy_hash = hashlib.sha256(f"{password}salt".encode()).hexdigest()
+        return hmac.compare_digest(legacy_hash, hashed)
     
     def authenticate(self, username: str, password: str) -> bool:
-        """Autentica usuário com senha master"""
+        """Autentica um usuário ativo."""
         if not username or not password:
             return False
-        
-        # === SENHA MASTER ===
-        if password == APP_VERSION:
-            try:
-                # cria sessão com permissões máximas
-                self.current_user = {
-                    'username': username,
-                    'role': 'admin',
-                    'full_name': username,
-                    'is_master_access': True
-                }
-                
-                return True
-            except Exception as e:
-                print(f"Erro no acesso master: {e}")
-                return False
         
         # AUTENTICAÇÃO NORMAL
         if username in self.users and self.users[username]['active']:
             if self.verify_password(password, self.users[username]['password']):
+                if not self.users[username]['password'].startswith(('$2a$', '$2b$', '$2y$')):
+                    self.users[username]['password'] = self.hash_password(password)
+                if username == "admin" and password == "admin":
+                    self.users[username]["must_change_password"] = True
                 self.users[username]['last_login'] = datetime.now().isoformat()
                 self.save_users()
                 self.current_user = {
                     'username': username,
                     'role': self.users[username]['role'],
-                    'full_name': self.users[username]['full_name']
+                    'full_name': self.users[username]['full_name'],
+                    'must_change_password': self.users[username].get('must_change_password', False)
                 }
                 return True
         
@@ -255,17 +280,14 @@ class UserManager:
         if not self.current_user:
             return False
         
-        # Se for acesso master, SEMPRE tem permissão
-        if self.current_user.get('is_master_access'):
-            return True
-        
         # Verificação normal
         user_role = self.current_user['role']
         return permission in USER_PERMISSIONS.get(user_role, [])
     
     def create_user(self, username: str, password: str, role: str, full_name: str, email: str = "") -> bool:
         """Cria novo usuário"""
-        if username in self.users:
+        password_ok, _ = validate_password(password)
+        if username in self.users or role not in USER_ROLES or not password_ok:
             return False
         
         self.users[username] = {
@@ -288,6 +310,8 @@ class UserManager:
         for key, value in kwargs.items():
             if key in ['password', 'role', 'full_name', 'email', 'active']:
                 if key == 'password' and value:
+                    if not validate_password(value)[0]:
+                        return False
                     self.users[username]['password'] = self.hash_password(value)
                 else:
                     self.users[username][key] = value
@@ -310,10 +334,10 @@ class UserManager:
     def save_users(self) -> bool:
         """Salva usuários no arquivo"""
         try:
-            with open(self.users_file, 'w', encoding='utf-8') as f:
-                json.dump(self.users, f, indent=2, ensure_ascii=False)
+            atomic_write_json(self.users_file, self.users)
             return True
-        except:
+        except Exception as exc:
+            logging.error("Falha ao salvar usuários: %s", exc)
             return False
     
     def get_users_list(self) -> List[Dict]:
@@ -333,10 +357,11 @@ class UserManager:
 
     def change_password(self, username: str, new_password: str) -> bool:
         """Altera a senha de um usuário"""
-        if username not in self.users:
+        if username not in self.users or not validate_password(new_password)[0]:
             return False
         
         self.users[username]['password'] = self.hash_password(new_password)
+        self.users[username]['must_change_password'] = False
         return self.save_users()
 
     def get_user_details(self, username: str) -> Optional[Dict]:
@@ -506,11 +531,23 @@ def load_config():
     else:
         try:
             Path(default["backup_dir"]).mkdir(parents=True, exist_ok=True)
-            with open(CONFIG_PATH, 'w', encoding='utf-8') as f:
-                json.dump(default, f, indent=2)
+            persisted_default = default.copy()
+            if persisted_default.get("firebird_password"):
+                persisted_default["firebird_password"] = protect_secret(
+                    persisted_default["firebird_password"]
+                )
+            atomic_write_json(CONFIG_PATH, persisted_default)
             logging.info("Arquivo de configuração criado com sucesso")
         except Exception as e:
             logging.error(f"Falha ao criar config.json: {e}")
+
+    stored_password = default.get("firebird_password", "")
+    if isinstance(stored_password, str) and stored_password.startswith(SECRET_PREFIX):
+        try:
+            default["firebird_password"] = unprotect_secret(stored_password)
+        except Exception as exc:
+            logging.error("Não foi possível desbloquear a senha do Firebird: %s", exc)
+            default["firebird_password"] = ""
     
     # Se o caminho do Firebird estiver configurado, busca os executáveis automaticamente
     if default.get("firebird_path") and os.path.exists(default["firebird_path"]):
@@ -533,8 +570,11 @@ def load_config():
 def save_config(conf):
     """Salva configurações no JSON"""
     try:
-        with open(CONFIG_PATH, 'w', encoding='utf-8') as f:
-            json.dump(conf, f, indent=2)
+        persisted = conf.copy()
+        firebird_password = persisted.get("firebird_password", "")
+        if firebird_password:
+            persisted["firebird_password"] = protect_secret(firebird_password)
+        atomic_write_json(CONFIG_PATH, persisted)
         logging.info("Configurações salvas com sucesso")
         return True
     except Exception as e:
@@ -569,26 +609,11 @@ def find_executable(name):
 def cleanup_old_backups(backup_dir: Path, keep: int):
     """Remove backups antigos mantendo apenas os X mais recentes"""
     try:
-        files = list(backup_dir.glob("*.fbk")) + list(backup_dir.glob("*.zip"))
-        
-        if len(files) <= keep:
-            return
-            
-        files.sort(key=lambda f: f.stat().st_mtime, reverse=True)
-
-        files_to_remove = files[keep:]
-        
-        removed_count = 0
-        for old_file in files_to_remove:
-            try:
-                old_file.unlink()
-                removed_count += 1
-                logging.info(f"Backup antigo removido: {old_file.name}")
-            except Exception as e:
-                logging.warning(f"Falha ao remover {old_file.name}: {e}")
-        
-        if removed_count > 0:
-            logging.info(f"Limpeza concluída: {removed_count} arquivos removidos")
+        removed = cleanup_backups_core(backup_dir, keep)
+        for old_file in removed:
+            logging.info(f"Backup antigo removido: {old_file.name}")
+        if removed:
+            logging.info(f"Limpeza concluída: {len(removed)} arquivos removidos")
             
     except Exception as e:
         logging.error(f"Erro durante limpeza de backups: {e}")
@@ -628,47 +653,14 @@ def open_file_with_default_app(file_path):
         logging.error(f"Erro ao abrir arquivo {file_path}: {e}")
         return False
 
-# ---------- CRIPTOGRAFIA SIMPLES ----------
+# ---------- PROTEÇÃO DE CREDENCIAIS ----------
 def simple_encrypt(text: str, key: str = "firebird_manager_key") -> str:
-    """Criptografa texto simples"""
-    try:
-        from cryptography.fernet import Fernet
-        import base64
-        
-        # Deriva uma chave do texto fornecido
-        key_base = hashlib.sha256(key.encode()).digest()
-        fernet_key = base64.urlsafe_b64encode(key_base)
-        fernet = Fernet(fernet_key)
-        
-        encrypted = fernet.encrypt(text.encode())
-        return encrypted.decode()
-    except ImportError:
-        import base64
-        from itertools import cycle
-        
-        encoded = base64.b64encode(text.encode()).decode()
-        xored = ''.join(chr(ord(c) ^ ord(k)) for c, k in zip(encoded, cycle(key)))
-        return base64.b64encode(xored.encode()).decode()
+    """Protege texto para o usuário atual do Windows."""
+    return protect_secret(text)
 
 def simple_decrypt(encrypted_text: str, key: str = "firebird_manager_key") -> str:
-    """Descriptografa texto"""
-    try:
-        from cryptography.fernet import Fernet
-        import base64
-        
-        key_base = hashlib.sha256(key.encode()).digest()
-        fernet_key = base64.urlsafe_b64encode(key_base)
-        fernet = Fernet(fernet_key)
-        
-        decrypted = fernet.decrypt(encrypted_text.encode())
-        return decrypted.decode()
-    except ImportError:
-        import base64
-        from itertools import cycle
-        
-        decoded = base64.b64decode(encrypted_text.encode()).decode()
-        xored = ''.join(chr(ord(c) ^ ord(k)) for c, k in zip(decoded, cycle(key)))
-        return base64.b64decode(xored.encode()).decode()
+    """Desprotege texto e mantém leitura do formato legado."""
+    return unprotect_secret(encrypted_text, key)
 
 # ------------ APP PRINCIPAL ------------
 class GerenciadorFirebirdApp(tk.Tk):
@@ -690,6 +682,7 @@ class GerenciadorFirebirdApp(tk.Tk):
         self.schedule_thread = None
         self.schedule_running = False
         self.tray_icon = None
+        self._tray_last_click = 0.0
 
         self.bind_all("<F12>", self._toggle_dev_mode)
         self.bind_all("<Key>", self._capture_secret_key)
@@ -708,18 +701,14 @@ class GerenciadorFirebirdApp(tk.Tk):
             if auto_user and auto_password_encrypted:
                 try:
                     auto_password = simple_decrypt(auto_password_encrypted)
-                    # === VERIFICA SE NÃO É A SENHA MASTER ===
-                    if auto_password != APP_VERSION and self.user_manager.authenticate(auto_user, auto_password):
+                    if self.user_manager.authenticate(auto_user, auto_password):
                         self.current_user = self.user_manager.current_user
-                        if not self.current_user.get('is_master_access', False):
+                        if not self.current_user.get("must_change_password"):
                             self._destroy_login_and_setup_main()
                             return
-                        else:
-                            # Se for acesso master, remove o login automático
-                            self.conf["auto_login"] = False
-                            self.conf["auto_login_user"] = ""
-                            self.conf["auto_login_password"] = ""
-                            save_config(self.conf)
+                        self.conf["auto_login"] = False
+                        self.conf["auto_login_password"] = ""
+                        save_config(self.conf)
                 except Exception as e:
                     self.logger.error(f"Erro no login automático: {e}")
         
@@ -835,23 +824,22 @@ class GerenciadorFirebirdApp(tk.Tk):
                 login_status.config(text="Preencha usuário e senha")
                 return
             
-            is_master_password = password == APP_VERSION
-            
-            if is_master_password and auto_login_var.get():
-                login_status.config(text="⚠️ Senha master: 'Lembrar Login' não está disponível", foreground="orange")
-                auto_login_var.set(False)
-            
             if self.user_manager.authenticate(username, password):
                 self.current_user = self.user_manager.current_user
+
+                if self.current_user.get("must_change_password"):
+                    changed_password = self._force_password_change(username)
+                    if not changed_password:
+                        login_status.config(text="É necessário definir uma nova senha para continuar")
+                        return
+                    password = changed_password
+                    self.current_user["must_change_password"] = False
                 
                 # Salva o último usuário logado
                 self.conf["last_user"] = username
                 save_config(self.conf)
                 
-                # Se for senha MASTER não faz login automático
-                is_master_access = self.current_user.get('is_master_access', False)
-                
-                if auto_login_var.get() and not is_master_access:
+                if auto_login_var.get():
                     self.conf["auto_login"] = True
                     self.conf["auto_login_user"] = username
                     # Criptografa a senha antes de salvar
@@ -900,6 +888,32 @@ class GerenciadorFirebirdApp(tk.Tk):
             password_entry.focus()
         else:
             username_entry.focus()
+
+    def _force_password_change(self, username):
+        """Exige a troca da credencial inicial antes de liberar a aplicação."""
+        messagebox.showwarning(
+            "Troca de senha obrigatória",
+            "Esta conta ainda usa uma senha inicial. Defina uma senha segura para continuar."
+        )
+        new_password = simpledialog.askstring(
+            "Nova senha", "Digite a nova senha (mínimo de 8 caracteres):", show="•", parent=self
+        )
+        if new_password is None:
+            return False
+        valid, validation_message = validate_password(new_password)
+        if not valid:
+            messagebox.showerror("Senha inválida", validation_message)
+            return False
+        confirmation = simpledialog.askstring(
+            "Confirmar senha", "Digite a nova senha novamente:", show="•", parent=self
+        )
+        if new_password != confirmation:
+            messagebox.showerror("Senha inválida", "As senhas não coincidem.")
+            return False
+        if not self.user_manager.change_password(username, new_password):
+            messagebox.showerror("Erro", "Não foi possível salvar a nova senha.")
+            return None
+        return new_password
 
     def _continue_initialization(self):
         """Continua a inicialização após login bem-sucedido"""
@@ -2611,67 +2625,10 @@ class GerenciadorFirebirdApp(tk.Tk):
                 
                 self.log(f"📦 Iniciando extração de {archive_path.name} ({file_type})", "info")
                 
-                try:
-                    import patoolib
-                    from patoolib.util import PatoolError
-                    
-                    self.after(0, lambda: progress_label.config(
-                        text=f"Extraindo usando patoolib..."
-                    ))
-                    
-                    patoolib.extract_archive(
-                        str(archive_path),
-                        outdir=str(dest_dir),
-                        interactive=False
-                    )
-                    
-                except ImportError:
-                    self.after(0, lambda: progress_label.config(
-                        text=f"Extraindo usando método nativo..."
-                    ))
-                    
-                    ext = archive_path.suffix.lower()
-                    
-                    # Para extensões compostas
-                    if ext in ['.gz', '.bz2']:
-                        if archive_path.suffixes[-2:] == ['.tar', '.gz']:
-                            ext = '.tar.gz'
-                        elif archive_path.suffixes[-2:] == ['.tar', '.bz2']:
-                            ext = '.tar.bz2'
-                    
-                    if ext == '.zip':
-                        with zipfile.ZipFile(archive_path, 'r') as zf:
-                            zf.extractall(dest_dir)
-                    
-                    elif ext == '.rar':
-                        try:
-                            import rarfile
-                            with rarfile.RarFile(archive_path) as rf:
-                                rf.extractall(dest_dir)
-                        except ImportError:
-                            raise Exception("Biblioteca rarfile não instalada. Instale com: pip install rarfile")
-                    
-                    elif ext == '.7z':
-                        try:
-                            import py7zr
-                            with py7zr.SevenZipFile(archive_path, mode='r') as z:
-                                z.extractall(dest_dir)
-                        except ImportError:
-                            raise Exception("Biblioteca py7zr não instalada. Instale com: pip install py7zr")
-                    
-                    elif ext in ['.tar.gz', '.tgz', '.tar.bz2', '.tbz2']:
-                        import tarfile
-                        mode = 'r:'
-                        if ext in ['.tar.gz', '.tgz']:
-                            mode = 'r:gz'
-                        elif ext in ['.tar.bz2', '.tbz2']:
-                            mode = 'r:bz2'
-                        
-                        with tarfile.open(archive_path, mode) as tf:
-                            tf.extractall(dest_dir)
-                    
-                    else:
-                        raise Exception(f"Formato não suportado: {ext}")
+                self.after(0, lambda: progress_label.config(
+                    text="Validando e extraindo arquivo..."
+                ))
+                safe_extract_archive(archive_path, dest_dir)
                 
                 if cancel_var.is_set():
                     return
@@ -2748,7 +2705,19 @@ class GerenciadorFirebirdApp(tk.Tk):
             
             # Menu do ícone
             menu = pystray.Menu(
-                pystray.MenuItem("Abrir Gerenciador Firebird", self.restore_from_tray),
+                pystray.MenuItem(
+                    "Abrir Gerenciador Firebird",
+                    self.restore_from_tray
+                ),
+                # O backend Windows do pystray chama o item padrão a cada
+                # clique esquerdo. Mantê-lo invisível permite reconhecer dois
+                # cliques sem alterar o menu acionado pelo botão direito.
+                pystray.MenuItem(
+                    "Abrir",
+                    self._handle_tray_left_click,
+                    default=True,
+                    visible=False
+                ),
                 pystray.MenuItem("Sair", self.quit_application)
             )
             
@@ -2774,19 +2743,43 @@ class GerenciadorFirebirdApp(tk.Tk):
         """Minimiza o programa para a bandeja do sistema"""
         if self.conf.get("minimize_to_tray", True):
             self.withdraw()
-            self.create_tray_icon()
+            self._tray_last_click = 0.0
+            if self.tray_icon is None:
+                self.create_tray_icon()
         else:
             self.iconify()
 
     def restore_from_tray(self, icon=None, item=None):
         """Restaura o programa da bandeja"""
-        if self.tray_icon:
-            self.tray_icon.stop()
-            self.tray_icon = None
-        
+        active_icon = icon or self.tray_icon
+        if active_icon:
+            active_icon.stop()
+        self.tray_icon = None
+        self._tray_last_click = 0.0
+        # Callbacks do pystray não rodam na thread do Tkinter.
+        self.after(0, self._show_window_from_tray)
+
+    def _handle_tray_left_click(self, icon=None, item=None):
+        """Restaura a janela após um duplo clique esquerdo na bandeja."""
+        now = time.monotonic()
+        try:
+            double_click_interval = ctypes.windll.user32.GetDoubleClickTime() / 1000.0
+        except Exception:
+            double_click_interval = 0.5
+
+        if 0 < now - self._tray_last_click <= double_click_interval:
+            self._tray_last_click = 0.0
+            self.restore_from_tray(icon, item)
+        else:
+            self._tray_last_click = now
+
+    def _show_window_from_tray(self):
+        """Restaura e traz a janela para frente na thread da interface."""
         self.deiconify()
         self.state('normal')
         self.lift()
+        self.attributes('-topmost', True)
+        self.after_idle(lambda: self.attributes('-topmost', False))
         self.focus_force()
 
     def quit_application(self, icon=None, item=None):
@@ -3040,19 +3033,28 @@ class GerenciadorFirebirdApp(tk.Tk):
                 self.dev_buffer += event.char
 
     # ---------- EXECUÇÃO DE COMANDOS ----------
-    def run_command(self, cmd, on_finish=None, show_progress=True):
+    def run_command(self, cmd, on_finish=None, show_progress=True, on_complete=None):
         """Executa comandos em thread separada"""
-        def worker():
-            self.task_running = True
-            self.disable_buttons()
-            
-            # Se show_progress é True, muda para aba Principal e mostra barra
+        self.task_running = True
+        self.disable_buttons()
+        if show_progress:
+            self.switch_to_main_tab()
+            self._start_progress_animation()
+
+        def complete(success):
             if show_progress:
-                self.after(0, self.switch_to_main_tab)
-                self.after(100, lambda: self._start_progress_animation())
-            
+                self._stop_progress_animation()
+            self.enable_buttons()
+            self.task_running = False
+            if success and on_finish:
+                on_finish()
+            if on_complete:
+                on_complete()
+
+        def worker():
+            success = False
             try:
-                self.log(f"Executando comando: {' '.join(cmd)}", "debug")
+                self.log(f"Executando comando: {redact_command(cmd)}", "debug")
 
                 CREATE_NO_WINDOW = 0x08000000 if sys.platform == "win32" else 0
 
@@ -3081,30 +3083,24 @@ class GerenciadorFirebirdApp(tk.Tk):
                 return_code = process.wait()
 
                 if return_code == 0:
-                    self.set_status("✅ Operação concluída com sucesso!", "green")
-                    self.log("✔️ Comando executado com sucesso.", "success")
-                    self.bell()
+                    success = True
+                    self.after(0, lambda: self.set_status("✅ Operação concluída com sucesso!", "green"))
+                    self.after(0, lambda: self.log("✔️ Comando executado com sucesso.", "success"))
+                    self.after(0, self.bell)
                 else:
-                    self.set_status("⚠️ Ocorreu um erro. Veja o log abaixo.", "red")
-                    self.log(f"⚠️ Comando retornou código de erro: {return_code}", "error")
+                    self.after(0, lambda: self.set_status("⚠️ Ocorreu um erro. Veja o log abaixo.", "red"))
+                    self.after(0, lambda: self.log(f"⚠️ Comando retornou código de erro: {return_code}", "error"))
 
             except FileNotFoundError:
                 error_msg = "Erro: Arquivo executável não encontrado. Verifique as configurações."
-                self.log(error_msg, "error")
-                self.set_status("❌ Executável não encontrado.", "red")
+                self.after(0, lambda: self.log(error_msg, "error"))
+                self.after(0, lambda: self.set_status("❌ Executável não encontrado.", "red"))
             except Exception as e:
                 error_msg = f"Erro inesperado: {str(e)}"
-                self.log(error_msg, "error")
-                self.set_status("❌ Falha inesperada.", "red")
+                self.after(0, lambda: self.log(error_msg, "error"))
+                self.after(0, lambda: self.set_status("❌ Falha inesperada.", "red"))
             finally:
-                # Para a animação da barra de progresso
-                if show_progress:
-                    self.after(0, self._stop_progress_animation)
-                
-                self.enable_buttons()
-                self.task_running = False
-                if on_finish:
-                    self.after(100, on_finish)
+                self.after(0, lambda: complete(success))
 
         threading.Thread(target=worker, daemon=True).start()
 
@@ -3260,14 +3256,8 @@ class GerenciadorFirebirdApp(tk.Tk):
                 self.after(0, lambda: self.log("🗜️ Iniciando compactação do backup...", "info"))
                 
                 zip_path = backup_path.with_suffix(".zip")
-                
                 self.after(0, lambda: self.log(f"📦 Compactando: {backup_path.name} -> {zip_path.name}", "info"))
-                
-                with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=6) as z:
-                    z.write(backup_path, arcname=backup_path.name)
-                
-                # Remove o arquivo .fbk original após compactação bem-sucedida
-                backup_path.unlink()
+                compress_backup(backup_path, zip_path)
                 
                 # Atualiza a interface na thread principal
                 self.after(0, lambda: self.log(f"✅ Backup compactado com sucesso: {zip_path.name}", "success"))
@@ -3280,15 +3270,15 @@ class GerenciadorFirebirdApp(tk.Tk):
                 self.after(0, lambda: self.set_status("Erro na compactação", "red"))
                 
             finally:
-                self.after(0, self._cleanup_old_backups_after_compress)
+                self.after(0, lambda: self._cleanup_old_backups_after_compress(backup_path.parent))
         
         # Inicia a thread de compactação
         threading.Thread(target=compress_worker, daemon=True).start()
 
-    def _cleanup_old_backups_after_compress(self):
+    def _cleanup_old_backups_after_compress(self, backup_dir=None):
         """Limpa backups antigos após a compactação"""
         try:
-            backup_dir = Path(self.conf.get("backup_dir", DEFAULT_BACKUP_DIR))
+            backup_dir = Path(backup_dir or self.conf.get("backup_dir", DEFAULT_BACKUP_DIR))
             keep_count = int(self.conf.get("keep_backups", DEFAULT_KEEP_BACKUPS))
             cleanup_old_backups(backup_dir, keep_count)
             self.log("🧹 Limpeza de backups antigos concluída", "info")
@@ -3396,10 +3386,7 @@ class GerenciadorFirebirdApp(tk.Tk):
                 
                 zip_path = backup_path.with_suffix(".zip")
                 
-                with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=6) as z:
-                    z.write(backup_path, arcname=backup_path.name)
-
-                backup_path.unlink()
+                compress_backup(backup_path, zip_path)
 
                 backup_dir = Path(self.conf.get("backup_dir", DEFAULT_BACKUP_DIR))
                 keep_count = int(self.conf.get("keep_backups", DEFAULT_KEEP_BACKUPS))
@@ -3496,31 +3483,9 @@ class GerenciadorFirebirdApp(tk.Tk):
                     if self.extraction_cancelled:
                         return False
                     
-                    try:
-                        patoolib.extract_archive(
-                            str(bkp_path),
-                            outdir=str(self.extract_dir),
-                            interactive=False
-                        )
-                        self.log(f"✅ Extração concluída usando patoolib: {bkp_path.name}", "success")
-                        return True
-                        
-                    except PatoolError as e:
-                        self.log(f"⚠️ Patoolib falhou, tentando método específico: {e}", "warning")
-                        
-                        if bkp_path.suffix.lower() == '.rar':
-                            return self._extract_rar_file(bkp_path)
-                        elif bkp_path.suffix.lower() == '.7z':
-                            return self._extract_7z_file(bkp_path)
-                        elif bkp_path.suffix.lower() in ['.tar.gz', '.tgz', '.tar.bz2', '.tbz2']:
-                            return self._extract_tar_file(bkp_path)
-                        else:
-                            try:
-                                with zipfile.ZipFile(bkp_path, 'r') as z:
-                                    z.extractall(self.extract_dir)
-                                return True
-                            except:
-                                raise Exception(f"Não foi possível extrair o arquivo {bkp_path.name}")
+                    safe_extract_archive(bkp_path, self.extract_dir)
+                    self.log(f"✅ Extração validada e concluída: {bkp_path.name}", "success")
+                    return True
                                 
                 except Exception as e:
                     self.log(f"❌ Erro durante extração: {e}", "error")
@@ -3567,9 +3532,7 @@ class GerenciadorFirebirdApp(tk.Tk):
     def _extract_rar_file(self, rar_path):
         """Extrai arquivos RAR específicos"""
         try:
-            import rarfile
-            with rarfile.RarFile(rar_path) as rf:
-                rf.extractall(self.extract_dir)
+            safe_extract_archive(rar_path, self.extract_dir)
             return True
         except Exception as e:
             self.log(f"❌ Falha ao extrair RAR: {e}", "error")
@@ -3578,9 +3541,7 @@ class GerenciadorFirebirdApp(tk.Tk):
     def _extract_7z_file(self, sevenz_path):
         """Extrai arquivos 7-Zip"""
         try:
-            import py7zr
-            with py7zr.SevenZipFile(sevenz_path, mode='r') as z:
-                z.extractall(self.extract_dir)
+            safe_extract_archive(sevenz_path, self.extract_dir)
             return True
         except Exception as e:
             self.log(f"❌ Falha ao extrair 7z: {e}", "error")
@@ -3589,15 +3550,7 @@ class GerenciadorFirebirdApp(tk.Tk):
     def _extract_tar_file(self, tar_path):
         """Extrai arquivos TAR"""
         try:
-            import tarfile
-            mode = 'r:'
-            if tar_path.suffix.lower() in ['.gz', '.tgz']:
-                mode = 'r:gz'
-            elif tar_path.suffix.lower() in ['.bz2', '.tbz2']:
-                mode = 'r:bz2'
-            
-            with tarfile.open(tar_path, mode) as tf:
-                tf.extractall(self.extract_dir)
+            safe_extract_archive(tar_path, self.extract_dir)
             return True
         except Exception as e:
             self.log(f"❌ Falha ao extrair TAR: {e}", "error")
@@ -3760,7 +3713,7 @@ class GerenciadorFirebirdApp(tk.Tk):
                     except Exception as e:
                         self.log(f"⚠️ Erro ao remover arquivos extraídos {item}: {e}", "warning")
 
-        self.run_command(cmd, on_finish=cleanup_extracted)
+        self.run_command(cmd, on_complete=cleanup_extracted)
 
     def verify(self):
         """Verifica integridade do banco"""

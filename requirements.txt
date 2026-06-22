@@ -1,0 +1,12 @@
+bcrypt>=4.1,<6
+cryptography>=42,<47
+fdb>=2.0,<3
+patool>=2,<5
+Pillow>=10,<13
+psutil>=5.9,<8
+py7zr>=0.21,<2
+pystray>=0.19,<1
+pywin32>=306
+rarfile>=4,<5
+schedule>=1.2,<2
+winshell>=0.6,<1

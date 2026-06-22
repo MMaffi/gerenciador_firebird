@@ -1,20 +1,36 @@
 # JSON
 *.json
+!config.example.json
+!version.json
 
 # Logs
 *.log
 
 # Backups
 backups
+backups/
 
 # Build
 build
 
 # Dist
 dist
+dist/
+
+# Instaladores gerados
+installer/
 
 # Spec
 *.spec
+!GerenciadorFirebird.spec
 
 # Relatórios
 Relatórios
+Relatórios/
+
+# Python / ambiente local
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.coverage

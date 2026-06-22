@@ -1,0 +1,16 @@
+{
+  "firebird_path": "C:/Program Files/Firebird/Firebird_4_0/bin",
+  "backup_dir": "C:/Backups/Firebird",
+  "keep_backups": 7,
+  "firebird_user": "SYSDBA",
+  "firebird_password": "",
+  "firebird_host": "localhost",
+  "firebird_port": "3050",
+  "page_size": "8192",
+  "auto_monitor": true,
+  "monitor_interval": 30,
+  "minimize_to_tray": true,
+  "start_with_windows": false,
+  "scheduled_backups": [],
+  "log_retention_days": 30
+}
