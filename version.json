@@ -1,5 +1,5 @@
 {
-    "latest_version": "2025.12.29.1110",
+    "latest_version": "2026.06.22.1502",
     "download_url": "https://github.com/MMaffi/gerenciador_firebird/releases/latest/download/GerenciadorFirebird_Installer.exe",
-    "release_notes": "✓ Restore com suporte a novos tipos de compactações de arquivo\n✓ Novas funções de compactar e descompactar arquivos"
+    "release_notes": "✓ Refatoração de aplicativo\n✓ Melhoria nas questões de segurança, autenticação e usabilidade do sistema"
 }

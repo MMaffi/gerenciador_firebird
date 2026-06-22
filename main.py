@@ -102,7 +102,7 @@ DEFAULT_KEEP_BACKUPS = 5
 REPORTS_DIR = DATA_DIR / "Relatórios"
 
 # Constantes para controle de versão
-APP_VERSION = "2025.12.29.1110"
+APP_VERSION = "2026.06.22.1502"
 VERSION_CHECK_URL = "https://raw.githubusercontent.com/MMaffi/gerenciador_firebird/main/version.json"
 
 # Opções disponíveis de pageSize
